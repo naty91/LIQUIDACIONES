@@ -10,10 +10,10 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from engine import *
 from engine import _month_num, _payroll_days_for_month, _period_in_range
 
-st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.2', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.2')
-st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · tolerancia monetaria ±$1,50 · salida manda según liquidación')
-st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia.')
+st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.3', page_icon='✅', layout='wide')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.3')
+st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · control legal de PERÍODOS · tolerancia ±$1,50')
+st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia. Además, la APP valida por separado el período correcto de décimo tercero y el ciclo de vacaciones según la fecha real de ingreso.')
 
 def fmtdate(v):
     return v.strftime('%d/%m/%Y') if isinstance(v,(date,datetime)) else str(v or '')
@@ -22,7 +22,7 @@ def money(v):
     try: return round(float(v or 0),2)
     except: return 0.0
 
-def make_pdf(summary_df, obs_df, day_obs_df):
+def make_pdf(summary_df, obs_df, day_obs_df, period_obs_df):
     bio=io.BytesIO()
     doc=SimpleDocTemplate(bio,pagesize=landscape(A4),leftMargin=18,rightMargin=18,topMargin=22,bottomMargin=22)
     styles=getSampleStyleSheet(); story=[]
@@ -52,6 +52,12 @@ def make_pdf(summary_df, obs_df, day_obs_df):
         dt=Table(dd,repeatRows=1,colWidths=[175,580])
         dt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.lightgrey),('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),7),('GRID',(0,0),(-1,-1),0.25,colors.grey),('VALIGN',(0,0),(-1,-1),'TOP')]))
         story.append(dt)
+    if not period_obs_df.empty:
+        story.append(Spacer(1,12)); story.append(Paragraph('Revisión de períodos legales de beneficios',styles['Heading2']))
+        pdx=[['Trabajador','Rubro','Observación']]+[[str(r.get('Trabajador',''))[:30],str(r.get('Rubro',''))[:18],str(r.get('Observación de período',''))[:140]] for _,r in period_obs_df.iterrows()]
+        pt=Table(pdx,repeatRows=1,colWidths=[165,100,490])
+        pt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.lightgrey),('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),7),('GRID',(0,0),(-1,-1),0.25,colors.grey),('VALIGN',(0,0),(-1,-1),'TOP')]))
+        story.append(pt)
     doc.build(story); return bio.getvalue()
 
 c1,c2,c3=st.columns(3)
@@ -78,14 +84,14 @@ except Exception as e:
 st.success(f'Procesamiento completo: {len(items)} liquidaciones · {len(personnel):,} ciclos BDD · {len(iess_df):,} registros IESS.')
 
 MONETARY_TOLERANCE=1.50
-enriched=[]; summary_rows=[]; obs_rows=[]; day_obs_rows=[]; month_rows=[]; contrib_rows=[]; benefit_rows=[]
+enriched=[]; summary_rows=[]; obs_rows=[]; day_obs_rows=[]; period_obs_rows=[]; period_rows=[]; month_rows=[]; contrib_rows=[]; benefit_rows=[]
 for x in items:
     prec,pmatch=resolve_personnel_record(personnel,x.get('ident',''),x['name'],x.get('end'))
     real_start=prec.get('start') if prec and prec.get('start') else x.get('start')
     ident=(prec.get('ident') if prec else '') or x.get('ident','')
     irows=iess_rows_for_employee(iess_df,ident,x['name'])
     legal=legal_benefits_from_iess(real_start,x.get('end'),irows,region,sbu) if irows else {}
-    dayrows=[]; observations=[]; day_observations=[]
+    dayrows=[]; observations=[]; day_observations=[]; period_observations=[]
     if not prec:
         day_observations.append('No encontrado en BDD Personal: no se puede validar días contra la base de personal')
     if not irows:
@@ -113,14 +119,39 @@ for x in items:
         row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días correctos':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS ajustada a días correctos':ibase_adj,'Dif. RRHH-IESS ajustada':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
         dayrows.append(row); month_rows.append(row)
 
+    # Control de períodos: la fecha de ingreso BDD define desde cuándo nace cada derecho; la salida RR.HH. cierra el cálculo.
+    rr_periods=rrhh_periods_from_item(x)
+    if legal:
+        d13_check=period_set_check(rr_periods, legal.get('d13_months',[]))
+        vac_check=period_set_check(rr_periods, legal.get('vac_months',[]))
+        if not d13_check['ok']:
+            parts=[]
+            if d13_check['missing']: parts.append('faltan '+fmt_period_months(d13_check['missing']))
+            if d13_check['extra']: parts.append('sobran '+fmt_period_months(d13_check['extra']))
+            period_observations.append(('Décimo tercero', f"Período RR.HH. no coincide con el legal ({'; '.join(parts)}). Debe usarse {fmtdate(legal.get('d13_period_start'))} a {fmtdate(legal.get('d13_period_end'))} — {legal.get('d13_type','')}."))
+        if not vac_check['ok']:
+            parts=[]
+            if vac_check['missing']: parts.append('faltan '+fmt_period_months(vac_check['missing']))
+            if vac_check['extra']: parts.append('sobran '+fmt_period_months(vac_check['extra']))
+            period_observations.append(('Vacaciones', f"Período RR.HH. no coincide con el ciclo por aniversario ({'; '.join(parts)}). Debe usarse {fmtdate(legal.get('vac_period_start'))} a {fmtdate(legal.get('vac_period_end'))} — {legal.get('vac_type','')}."))
+        period_rows += [
+            {'Trabajador':x['name'],'Rubro':'Décimo tercero','Tipo':legal.get('d13_type',''),'Inicio legal':fmtdate(legal.get('d13_period_start')),'Fin legal':fmtdate(legal.get('d13_period_end')),'Meses esperados':fmt_period_months(legal.get('d13_months',[])),'Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'✅ OK' if d13_check['ok'] else '⚠️ REVISAR'},
+            {'Trabajador':x['name'],'Rubro':'Décimo cuarto','Tipo':legal.get('d14_type',''),'Inicio legal':fmtdate(legal.get('d14_period_start')),'Fin legal':fmtdate(legal.get('d14_period_end')),'Meses esperados':fmt_period_months(legal.get('d14_months',[])),'Meses en RR.HH.':'No consta en este formato','Estado período':'ℹ️ INFORMATIVO'},
+            {'Trabajador':x['name'],'Rubro':'Vacaciones ciclo vigente','Tipo':legal.get('vac_type',''),'Inicio legal':fmtdate(legal.get('vac_period_start')),'Fin legal':fmtdate(legal.get('vac_period_end')),'Meses esperados':fmt_period_months(legal.get('vac_months',[])),'Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'✅ OK' if vac_check['ok'] else '⚠️ REVISAR'},
+        ]
+        # Ciclos completos de vacaciones ya generados se muestran aparte; no se cobran dos veces sin validar si fueron gozados/pagados.
+        for vc in legal.get('vacation_cycles',[]):
+            if vc.get('Tipo')=='AÑO COMPLETO':
+                period_rows.append({'Trabajador':x['name'],'Rubro':f"Vacaciones ciclo {vc.get('Ciclo')}",'Tipo':'AÑO COMPLETO GENERADO','Inicio legal':fmtdate(vc.get('Desde')),'Fin legal':fmtdate(vc.get('Hasta')),'Meses esperados':fmt_period_months(month_sequence(vc.get('Desde'),vc.get('Hasta'))),'Meses en RR.HH.':'Validar historial de goce/pago','Estado período':'ℹ️ VALIDAR SI PENDIENTE'})
+
     d13=legal.get('d13_calc',0) if legal else 0
     vac=legal.get('vac_current_calc',0) if legal else 0
     if legal:
         if abs(money(x.get('reported13'))-money(d13))>MONETARY_TOLERANCE: observations.append(f"Décimo tercero: RR.HH. ${money(x.get('reported13')):.2f} vs APP/IESS ${money(d13):.2f}")
         if abs(money(x.get('reported_vac'))-money(vac))>MONETARY_TOLERANCE: observations.append(f"Vacaciones: RR.HH. ${money(x.get('reported_vac')):.2f} vs APP/IESS ${money(vac):.2f}")
         benefit_rows += [
-            {'Trabajador':x['name'],'Rubro':'Décimo tercero','RR.HH.':money(x.get('reported13')),'APP/IESS':money(d13),'Diferencia':round(money(x.get('reported13'))-money(d13),2)},
-            {'Trabajador':x['name'],'Rubro':'Vacaciones proporcionales','RR.HH.':money(x.get('reported_vac')),'APP/IESS':money(vac),'Diferencia':round(money(x.get('reported_vac'))-money(vac),2)},
+            {'Trabajador':x['name'],'Rubro':f"Décimo tercero ({legal.get('d13_type','')})",'RR.HH.':money(x.get('reported13')),'APP/IESS':money(d13),'Diferencia':round(money(x.get('reported13'))-money(d13),2)},
+            {'Trabajador':x['name'],'Rubro':f"Vacaciones ({legal.get('vac_type','')})",'RR.HH.':money(x.get('reported_vac')),'APP/IESS':money(vac),'Diferencia':round(money(x.get('reported_vac'))-money(vac),2)},
             {'Trabajador':x['name'],'Rubro':'Décimo cuarto','RR.HH.':None,'APP/IESS':money(legal.get('d14_calc',0)),'Diferencia':None},
             {'Trabajador':x['name'],'Rubro':'Fondos de reserva','RR.HH.':None,'APP/IESS':money(legal.get('fund_reserve_calc',0)),'Diferencia':None},
         ]
@@ -136,28 +167,31 @@ for x in items:
     # Quitar duplicados conservando orden
     observations=list(dict.fromkeys(observations))
     day_observations=list(dict.fromkeys(day_observations))
+    period_observations=list(dict.fromkeys(period_observations))
     money_status='✅ OK' if not observations else '⚠️ REVISAR'
     days_status='✅ OK' if not day_observations else '⚠️ REVISAR DÍAS'
-    status='✅ APTO' if (not observations and not day_observations) else '⚠️ REVISAR'
+    periods_status='✅ OK' if not period_observations else '⚠️ REVISAR PERÍODO'
+    status='✅ APTO' if (not observations and not day_observations and not period_observations) else '⚠️ REVISAR'
     if prec and prec.get('status')=='REINGRESO': status += ' · 🔁 REINGRESO'
     summary_rows.append({
-        'Trabajador':x['name'],'Cédula':ident,'Estado':status,'Revisión valores':money_status,'Revisión días':days_status,'Estado BDD':prec.get('status','') if prec else 'NO ENCONTRADO',
+        'Trabajador':x['name'],'Cédula':ident,'Estado':status,'Revisión valores':money_status,'Revisión días':days_status,'Revisión períodos':periods_status,'Estado BDD':prec.get('status','') if prec else 'NO ENCONTRADO',
         'Ingreso RRHH':fmtdate(x.get('start')),'Ingreso BDD':fmtdate(real_start),'Salida RRHH':fmtdate(x.get('end')),'Salida BDD':fmtdate(prec.get('end')) if prec and prec.get('end') else '',
         'Días RRHH':total_rr,'Días correctos':total_app,'Días IESS (informativo)':total_iess if irows else None,
-        'D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
-        'Vac RRHH':money(x.get('reported_vac')),'Vac APP/IESS':money(vac) if legal else None,'Dif Vac':round(money(x.get('reported_vac'))-money(vac),2) if legal else None,
-        'Nº obs. valores':len(observations),'Nº obs. días':len(day_observations),
-        'Observaciones valores':' | '.join(observations),'Observaciones días':' | '.join(day_observations)
+        'Período D13':(f"{fmtdate(legal.get('d13_period_start'))} - {fmtdate(legal.get('d13_period_end'))} ({legal.get('d13_type','')})" if legal else ''),'D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
+        'Período Vac':(f"{fmtdate(legal.get('vac_period_start'))} - {fmtdate(legal.get('vac_period_end'))} ({legal.get('vac_type','')})" if legal else ''),'Vac RRHH':money(x.get('reported_vac')),'Vac APP/IESS':money(vac) if legal else None,'Dif Vac':round(money(x.get('reported_vac'))-money(vac),2) if legal else None,
+        'Nº obs. valores':len(observations),'Nº obs. días':len(day_observations),'Nº obs. períodos':len(period_observations),
+        'Observaciones valores':' | '.join(observations),'Observaciones días':' | '.join(day_observations),'Observaciones períodos':' | '.join([f'{r}: {o}' for r,o in period_observations])
     })
     for o in observations: obs_rows.append({'Trabajador':x['name'],'Cédula':ident,'Observación':o})
     for o in day_observations: day_obs_rows.append({'Trabajador':x['name'],'Cédula':ident,'Observación de días':o})
+    for rubro,o in period_observations: period_obs_rows.append({'Trabajador':x['name'],'Cédula':ident,'Rubro':rubro,'Observación de período':o})
     enriched.append((x,prec,legal,dayrows))
 
-sdf=pd.DataFrame(summary_rows); odf=pd.DataFrame(obs_rows); dodf=pd.DataFrame(day_obs_rows); mdf=pd.DataFrame(month_rows); cdf=pd.DataFrame(contrib_rows); bdf=pd.DataFrame(benefit_rows)
+sdf=pd.DataFrame(summary_rows); odf=pd.DataFrame(obs_rows); dodf=pd.DataFrame(day_obs_rows); podf=pd.DataFrame(period_obs_rows); pdf_periods=pd.DataFrame(period_rows); mdf=pd.DataFrame(month_rows); cdf=pd.DataFrame(contrib_rows); bdf=pd.DataFrame(benefit_rows)
 
-ok_count=int(((sdf['Nº obs. valores']==0) & (sdf['Nº obs. días']==0)).sum()); review_count=len(sdf)-ok_count
+ok_count=int(((sdf['Nº obs. valores']==0) & (sdf['Nº obs. días']==0) & (sdf['Nº obs. períodos']==0)).sum()); review_count=len(sdf)-ok_count
 m1,m2,m3,m4=st.columns(4)
-m1.metric('Liquidaciones procesadas',len(sdf)); m2.metric('✅ Aptas',ok_count); m3.metric('⚠️ Revisar',review_count); m4.metric('Obs. valores / días',f'{len(odf)} / {len(dodf)}')
+m1.metric('Liquidaciones procesadas',len(sdf)); m2.metric('✅ Aptas',ok_count); m3.metric('⚠️ Revisar',review_count); m4.metric('Obs. valores / días / períodos',f'{len(odf)} / {len(dodf)} / {len(podf)}')
 
 st.markdown('### 1. Resultado masivo – todas las liquidaciones')
 st.dataframe(sdf,use_container_width=True,hide_index=True,height=min(650,80+35*len(sdf)))
@@ -171,13 +205,20 @@ st.caption('La fecha de ingreso se toma de la BDD de Personal. La fecha de salid
 if dodf.empty: st.success('No se detectaron diferencias entre los días de RR.HH. y los días correctos calculados con ingreso BDD + salida RR.HH.')
 else: st.dataframe(dodf,use_container_width=True,hide_index=True,height=min(500,80+32*len(dodf)))
 
-st.markdown('### 4. Control masivo mes a mes')
+st.markdown('### 4. Revisión de períodos legales — décimos y vacaciones')
+st.caption('Décimo tercero se controla por su período legal 1-dic/30-nov, recortado por fecha de ingreso y salida. Vacaciones se controlan por aniversario de ingreso. La APP marca si corresponde período completo o proporcional.')
+if podf.empty: st.success('Los períodos de RR.HH. coinciden con los períodos legales aplicables.')
+else: st.dataframe(podf,use_container_width=True,hide_index=True,height=min(500,80+32*len(podf)))
+st.markdown('#### Matriz de períodos por trabajador')
+st.dataframe(pdf_periods,use_container_width=True,hide_index=True,height=500)
+
+st.markdown('### 5. Control masivo mes a mes')
 st.dataframe(mdf,use_container_width=True,hide_index=True,height=500)
 
-st.markdown('### 5. Beneficios calculados')
+st.markdown('### 6. Beneficios calculados')
 st.dataframe(bdf,use_container_width=True,hide_index=True,height=420)
 
-st.markdown('### 6. Aportes IESS')
+st.markdown('### 7. Aportes IESS')
 st.dataframe(cdf,use_container_width=True,hide_index=True,height=420)
 
 bio=io.BytesIO()
@@ -185,6 +226,8 @@ with pd.ExcelWriter(bio,engine='openpyxl') as wr:
     sdf.to_excel(wr,index=False,sheet_name='RESUMEN MASIVO')
     odf.to_excel(wr,index=False,sheet_name='OBS VALORES')
     dodf.to_excel(wr,index=False,sheet_name='REVISION DIAS')
+    podf.to_excel(wr,index=False,sheet_name='OBS PERIODOS')
+    pdf_periods.to_excel(wr,index=False,sheet_name='PERIODOS BENEFICIOS')
     mdf.to_excel(wr,index=False,sheet_name='MES A MES')
     bdf.to_excel(wr,index=False,sheet_name='BENEFICIOS')
     cdf.to_excel(wr,index=False,sheet_name='APORTES IESS')
@@ -195,9 +238,9 @@ with pd.ExcelWriter(bio,engine='openpyxl') as wr:
         if legal and legal.get('vacation_cycles'):
             pd.DataFrame([{k:v for k,v in c.items() if k!='Detalle'} for c in legal['vacation_cycles']]).to_excel(wr,index=False,sheet_name=sn,startrow=len(dayrows)+3)
 
-pdf_bytes=make_pdf(sdf,odf,dodf)
+pdf_bytes=make_pdf(sdf,odf,dodf,podf)
 d1,d2=st.columns(2)
-with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_2.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
-with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_2.pdf','application/pdf',use_container_width=True)
+with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
+with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.pdf','application/pdf',use_container_width=True)
 
-st.caption('v8.2 · tolerancia monetaria ±$1,50 · ingreso BDD + salida RR.HH. · base IESS ajustada a días correctos · días IESS informativos')
+st.caption('v8.3 · control legal de períodos · tolerancia ±$1,50 · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')

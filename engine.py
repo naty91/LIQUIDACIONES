@@ -1026,3 +1026,178 @@ def legal_benefits_from_iess(start: date, end: date, irows, region='Costa / Insu
         'last_iess_salary':round(last_salary,2),'completed_years':years,
         'fund_reserve_start':fund_reserve_from,'fund_reserve_base_iess':fr_base,'fund_reserve_calc':fund_reserve,'fund_reserve_detail':fr_detail,
     }
+
+# ===================== V8.3: CONTROL EXPLÍCITO DE PERIODOS DE BENEFICIOS =====================
+def month_sequence(start: date, end: date):
+    """Lista (año, mes) inclusive entre dos fechas."""
+    if not start or not end or end < start:
+        return []
+    out=[]
+    y,m=start.year,start.month
+    while (y,m) <= (end.year,end.month):
+        out.append((y,m))
+        m += 1
+        if m == 13:
+            m=1; y+=1
+    return out
+
+
+def fmt_period_months(periods):
+    return ', '.join(f'{m:02d}/{y}' for y,m in periods)
+
+
+def rrhh_periods_from_item(item):
+    out=[]
+    for r in item.get('rows',[]):
+        m=_month_num(r.get('Mes'))
+        y=int(r.get('Año inferido') or (item.get('end').year if item.get('end') else date.today().year))
+        if m:
+            out.append((y,m))
+    return list(dict.fromkeys(out))
+
+
+def current_d13_window(start: date, end: date):
+    """Ventana de décimo tercero vigente a la fecha de salida.
+    Período legal: 1-dic a 30-nov; la fecha de ingreso recorta el inicio si es posterior.
+    """
+    if not start or not end or end < start:
+        return None
+    if end.month == 12:
+        statutory_start=date(end.year,12,1); statutory_end=date(end.year+1,11,30)
+    else:
+        statutory_start=date(end.year-1,12,1); statutory_end=date(end.year,11,30)
+    applied_start=max(start,statutory_start)
+    applied_end=min(end,statutory_end)
+    if applied_end < applied_start:
+        return None
+    full = applied_start == statutory_start and applied_end == statutory_end
+    reasons=[]
+    if applied_start > statutory_start: reasons.append('ingreso dentro del período')
+    if applied_end < statutory_end: reasons.append('salida antes del cierre')
+    kind='PERÍODO COMPLETO' if full else 'PROPORCIONAL'
+    reason='; '.join(reasons) if reasons else 'período legal completo'
+    return {'statutory_start':statutory_start,'statutory_end':statutory_end,
+            'start':applied_start,'end':applied_end,'type':kind,'reason':reason,
+            'months':month_sequence(applied_start,applied_end)}
+
+
+def current_d14_window(start: date, end: date, region='Costa / Insular'):
+    if not start or not end or end < start:
+        return None
+    statutory_start,statutory_end=dec14_period(end,region)
+    applied_start=max(start,statutory_start); applied_end=min(end,statutory_end)
+    if applied_end < applied_start:
+        return None
+    full = applied_start == statutory_start and applied_end == statutory_end
+    reasons=[]
+    if applied_start > statutory_start: reasons.append('ingreso dentro del período')
+    if applied_end < statutory_end: reasons.append('salida antes del cierre')
+    return {'statutory_start':statutory_start,'statutory_end':statutory_end,
+            'start':applied_start,'end':applied_end,
+            'type':'PERÍODO COMPLETO' if full else 'PROPORCIONAL',
+            'reason':'; '.join(reasons) if reasons else 'período legal completo',
+            'months':month_sequence(applied_start,applied_end)}
+
+
+def current_vacation_window(start: date, end: date):
+    """Ciclo vacacional que está vigente en la fecha de salida, basado en aniversario de ingreso."""
+    if not start or not end or end < start:
+        return None
+    years=completed_years(start,end)
+    try:
+        cycle_start=date(start.year+years,start.month,start.day)
+    except ValueError:
+        cycle_start=date(start.year+years,start.month,28)
+    # Si el aniversario coincide exactamente con la salida, el ciclo anterior quedó completo.
+    if cycle_start == end and years > 0:
+        try:
+            cycle_start=date(start.year+years-1,start.month,start.day)
+        except ValueError:
+            cycle_start=date(start.year+years-1,start.month,28)
+    try:
+        next_anniv=date(cycle_start.year+1,cycle_start.month,cycle_start.day)
+    except ValueError:
+        next_anniv=date(cycle_start.year+1,cycle_start.month,28)
+    full_end=next_anniv - pd.Timedelta(days=1)
+    full_end=full_end.date() if hasattr(full_end,'date') else full_end
+    applied_end=min(end,full_end)
+    full = applied_end == full_end
+    return {'start':cycle_start,'end':applied_end,'full_cycle_end':full_end,
+            'type':'AÑO COMPLETO' if full else 'PROPORCIONAL AL CESE',
+            'reason':'ciclo por aniversario de ingreso',
+            'months':month_sequence(cycle_start,applied_end)}
+
+
+def period_set_check(rrhh_periods, expected_periods):
+    rr=set(rrhh_periods or []); ex=set(expected_periods or [])
+    missing=sorted(ex-rr); extra=sorted(rr-ex)
+    return {'missing':missing,'extra':extra,'ok':not missing and not extra}
+
+def legal_benefits_from_iess(start: date, end: date, irows, region='Costa / Insular', sbu=SBU_2026):
+    """V8.3: beneficios por sus períodos legales, recortados por ingreso y salida.
+
+    - D13: 1-dic / 30-nov, proporcional si ingreso/salida recortan el período.
+    - D14: período regional, proporcional por tiempo aplicable.
+    - Vacaciones: ciclo individual por aniversario de la fecha de ingreso.
+    Las bases monetarias usan IESS ajustado a los días correctos del tramo.
+    """
+    if not start or not end or end < start:
+        return {}
+
+    w13=current_d13_window(start,end)
+    if w13:
+        d13_base,d13_detail=sum_iess_base(irows,w13['start'],w13['end'])
+        d13=round(d13_base/12,2)
+    else:
+        d13_base,d13_detail,d13=0.0,[],0.0
+
+    w14=current_d14_window(start,end,region)
+    if w14:
+        d14_days=max(0,min(360,days360_us(w14['start'],w14['end'])+1))
+        d14=round(num(sbu)/360*d14_days,2)
+    else:
+        d14_days,d14=0,0.0
+
+    all_vac=vacation_cycles(start,end,irows)
+    wvac=current_vacation_window(start,end)
+    if wvac:
+        vac_base,vac_detail=sum_iess_base(irows,wvac['start'],wvac['end'])
+        vac_current=round(vac_base/24,2)
+    else:
+        vac_base,vac_detail,vac_current=0.0,[],0.0
+
+    last_salary=latest_iess_salary(irows,end)
+    years=completed_years(start,end)
+    try:
+        fund_reserve_from=date(start.year+1,start.month,start.day)
+    except ValueError:
+        fund_reserve_from=date(start.year+1,start.month,28)
+    fr_base,fr_detail=(0.0,[])
+    if end >= fund_reserve_from:
+        fr_base,fr_detail=sum_iess_base(irows,fund_reserve_from,end)
+    fund_reserve=round(fr_base/12,2)
+
+    return {
+        'd13_period_start':w13['start'] if w13 else None,
+        'd13_period_end':w13['end'] if w13 else None,
+        'd13_statutory_start':w13['statutory_start'] if w13 else None,
+        'd13_statutory_end':w13['statutory_end'] if w13 else None,
+        'd13_type':w13['type'] if w13 else '', 'd13_reason':w13['reason'] if w13 else '',
+        'd13_months':w13['months'] if w13 else [],
+        'd13_base_iess':d13_base,'d13_calc':d13,'d13_detail':d13_detail,
+        'd14_period_start':w14['start'] if w14 else None,
+        'd14_period_end':w14['end'] if w14 else None,
+        'd14_statutory_start':w14['statutory_start'] if w14 else None,
+        'd14_statutory_end':w14['statutory_end'] if w14 else None,
+        'd14_type':w14['type'] if w14 else '', 'd14_reason':w14['reason'] if w14 else '',
+        'd14_months':w14['months'] if w14 else [], 'd14_days':d14_days,'d14_calc':d14,
+        'vacation_cycles':all_vac,
+        'vac_period_start':wvac['start'] if wvac else None,
+        'vac_period_end':wvac['end'] if wvac else None,
+        'vac_full_cycle_end':wvac['full_cycle_end'] if wvac else None,
+        'vac_type':wvac['type'] if wvac else '', 'vac_reason':wvac['reason'] if wvac else '',
+        'vac_months':wvac['months'] if wvac else [],
+        'vac_current_calc':vac_current,'vac_current_base':vac_base,'vac_current_detail':vac_detail,
+        'last_iess_salary':round(last_salary,2),'completed_years':years,
+        'fund_reserve_start':fund_reserve_from,'fund_reserve_base_iess':fr_base,'fund_reserve_calc':fund_reserve,'fund_reserve_detail':fr_detail,
+    }

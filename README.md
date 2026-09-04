@@ -1,19 +1,24 @@
-# Verificador de Liquidaciones CENASE v8.2
+# Verificador de Liquidaciones CENASE v8.3 – Control legal de períodos
 
-Ajuste principal de esta versión:
-
-- La fecha de ingreso se toma de la BDD de Personal.
-- La fecha de salida que manda para días y beneficios es la indicada en la liquidación de RR.HH.
-- Los días IESS son informativos y no generan observación por sí solos.
-- Para la base legal usada en décimo tercero, vacaciones y otros cálculos basados en IESS, la APP conserva el valor diario implícito del IESS pero reemplaza los días por los días correctos del vínculo laboral.
-- Ejemplo: IESS reporta $482 por 30 días, pero la liquidación indica salida el día 27: $482 / 30 x 27 = $433,80 de base IESS ajustada.
-- La comparación RR.HH. vs IESS se realiza contra la BASE IESS AJUSTADA, no contra la base mensual cruda cuando los días reportados por IESS no coinciden con el período correcto.
-- Tolerancia monetaria: diferencias de hasta USD 1,50 pasan como OK.
-- La revisión de días se hace contra ingreso BDD + salida RR.HH.; no contra días IESS.
+Cambios principales:
+- Fecha de ingreso: se toma del ciclo correcto de la BDD de Personal.
+- Fecha de salida: manda la fecha indicada en la liquidación de RR.HH.
+- Días IESS: informativos; no generan observación por sí solos.
+- Base IESS: se ajusta a los días correctos según ingreso BDD + salida RR.HH.
+- Tolerancia monetaria: diferencias hasta USD 1,50 pasan como OK.
+- Décimo tercero: valida el período legal 1 de diciembre a 30 de noviembre, recortado por ingreso/salida. La APP indica PERÍODO COMPLETO o PROPORCIONAL.
+- Décimo cuarto: valida el período regional (Costa/Insular: 1-mar a último día de febrero; Sierra/Amazonía: 1-ago a 31-jul), recortado por ingreso/salida.
+- Vacaciones: usa ciclos individuales por aniversario de la fecha real de ingreso. La APP indica AÑO COMPLETO o PROPORCIONAL AL CESE.
+- La lista de meses usada por RR.HH. se compara por separado contra los meses que legalmente corresponden a D13 y al ciclo vacacional vigente.
+- Ciclos completos de vacaciones anteriores se muestran como informativos para validar si ya fueron gozados/pagados; no se suman automáticamente para evitar duplicidad.
 
 ## Archivos para Streamlit
 Subir a la raíz del repositorio:
-- main.py
-- engine.py
-- requirements.txt
+- `main.py`
+- `engine.py`
+- `requirements.txt`
 
+## Archivos de entrada
+1. Liquidaciones RR.HH. masivas.
+2. `BDD de personal.xlsx`.
+3. `IESS BASE.xlsx`.
