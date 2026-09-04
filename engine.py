@@ -496,6 +496,13 @@ def extract_cenase_batch(file_obj):
             if _looks_name(a) and _is_date(ws.cell(r + 1, 1).value) and _is_date(ws.cell(r + 2, 1).value) and str(ws.cell(r + 3, 1).value or '').strip().lower() == 'mes':
                 start_row = r
                 name = str(a).strip()
+                # La cédula suele estar a la derecha del nombre en el formato masivo.
+                ident = ''
+                for cc in range(2, min(ws.max_column, 10) + 1):
+                    cand = normalize_id(ws.cell(r, cc).value)
+                    if len(cand) == 10:
+                        ident = cand
+                        break
                 start = as_date(ws.cell(r + 1, 1).value)
                 end = as_date(ws.cell(r + 2, 1).value)
                 rows = []
@@ -588,7 +595,7 @@ def extract_cenase_batch(file_obj):
                 failures = money_failures + day_failures
 
                 out.append({
-                    'sheet': ws.title, 'row': start_row, 'name': name, 'start': start, 'end': end,
+                    'sheet': ws.title, 'row': start_row, 'name': name, 'ident': ident, 'start': start, 'end': end,
                     'rows': rows, 'day_checks': day_checks,
                     'base': base, 'days': detail_days, 'reported_total_days': reported_total_days,
                     'expected_days': calculated_days, 'days_diff': round(reported_total_days - calculated_days, 2),
@@ -780,3 +787,73 @@ def build_cross_check(liq_item, personnel_row=None, personnel_map=None, iess_row
         'day_checks_real': real_day_checks,
         'iess_checks': iess_checks,
     }
+
+# ===================== V6: BDD CENASE AUTOMATICA (ACTIVOS / REINGRESOS / INACTIVOS) =====================
+def load_cenase_personnel_database(file_obj, default_salary=SBU_2026):
+    """Lee directamente la BDD CENASE y normaliza relaciones laborales históricas.
+
+    Fuentes reconocidas: ACTIVOS (encabezado fila 5), REINGRESOS (fila 2),
+    INACTIVOS (fila 5). La BDD actual no contiene sueldo básico; por ello se usa
+    el salario básico de control indicado por el usuario (por defecto SBU 2026 = 482).
+    """
+    file_obj.seek(0)
+    xls = pd.ExcelFile(file_obj)
+    required = {'ACTIVOS','REINGRESOS','INACTIVOS'}
+    if not required.issubset(set(xls.sheet_names)):
+        raise ValueError('La BDD no contiene las hojas ACTIVOS, REINGRESOS e INACTIVOS esperadas.')
+    records = []
+
+    def add(ident, name, start, end=None, status='', source='', motive='', salary=default_salary, cycle=''):
+        ident_n = normalize_id(ident); name_n = str(name or '').strip(); s=as_date(start); e=as_date(end)
+        if not s or (not ident_n and not name_n): return
+        records.append({'ident':ident_n,'name':name_n,'start':s,'end':e,'status':status,'source':source,
+                        'motive':str(motive or '').strip(),'salary':num(salary) or num(default_salary),'cycle':cycle})
+
+    file_obj.seek(0)
+    act = pd.read_excel(file_obj, sheet_name='ACTIVOS', header=4, dtype=object)
+    for _, r in act.iterrows():
+        add(r.get('C. Identidad'), r.get('Nombres Completos'), r.get('F. INGRESO'), None,
+            'ACTIVO','ACTIVOS','',default_salary,'VIGENTE')
+
+    file_obj.seek(0)
+    ina = pd.read_excel(file_obj, sheet_name='INACTIVOS', header=4, dtype=object)
+    for _, r in ina.iterrows():
+        add(r.get('C. Identidad'), r.get('Nombres Completos'), r.get('F. INGRESO'), r.get('F. SALIDA'),
+            'INACTIVO','INACTIVOS',r.get('MOTIVO DE SALIDA'),default_salary,'HISTÓRICO')
+
+    file_obj.seek(0)
+    rei = pd.read_excel(file_obj, sheet_name='REINGRESOS', header=1, dtype=object)
+    # Pandas desambigua columnas repetidas como F. INGRESO.1, F. INGRESO.2, etc.
+    starts=[c for c in rei.columns if normalize_text(c).startswith('F INGRESO')]
+    exits=[c for c in rei.columns if normalize_text(c).startswith('F SALIDA')]
+    motives=[c for c in rei.columns if normalize_text(c).startswith('MOTIVO SALIDA')]
+    for _, r in rei.iterrows():
+        for i, sc in enumerate(starts):
+            ec = exits[i] if i < len(exits) else None; mc = motives[i] if i < len(motives) else None
+            add(r.get('C. Identidad'), r.get('Nombres Completos'), r.get(sc), r.get(ec) if ec else None,
+                'REINGRESO','REINGRESOS',r.get(mc) if mc else '',default_salary,f'CICLO {i+1}')
+    return records
+
+
+def resolve_personnel_record(records, ident='', name='', liquidation_end=None):
+    """Escoge el ciclo laboral que corresponde a la liquidación, no el primer ingreso histórico."""
+    ident_n=normalize_id(ident); name_n=normalize_text(name); end=as_date(liquidation_end)
+    candidates=[]
+    for r in records or []:
+        match = (ident_n and r['ident']==ident_n) or (name_n and normalize_text(r['name'])==name_n)
+        if not match: continue
+        if end and r['start'] > end: continue
+        # Puntaje: cédula > nombre; salida exacta/cercana > ciclo abierto; ingreso más reciente.
+        score = 1000 if ident_n and r['ident']==ident_n else 500
+        if end and r.get('end'):
+            delta=abs((r['end']-end).days)
+            score += max(0, 300-delta)
+            if r['end']==end: score += 500
+        elif end and not r.get('end'):
+            score += 150
+        score += r['start'].toordinal()/1000000.0
+        candidates.append((score,r))
+    if not candidates: return None,''
+    candidates.sort(key=lambda x:x[0], reverse=True)
+    r=candidates[0][1]
+    return r, ('CÉDULA' if ident_n and r['ident']==ident_n else 'NOMBRE')

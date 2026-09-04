@@ -12,6 +12,7 @@ from engine import (
     extract_cenase_batch, money, read_tabular_excel, make_reference_index,
     lookup_reference, build_cross_check, normalize_text, normalize_id,
     IESS_PERSONAL_RATE, IESS_EMPLOYER_RATE, IESS_TOTAL_RATE,
+    load_cenase_personnel_database, resolve_personnel_record, SBU_2026,
 )
 
 st.set_page_config(page_title='Verificador Integral de Liquidaciones | CENASE', page_icon='✅', layout='wide')
@@ -63,18 +64,16 @@ with c3:
 
 personnel_df = None
 personnel_map = {}
+personnel_records = []
+default_basic = st.number_input('Salario básico mensual de control para días incompletos', min_value=0.0, value=float(SBU_2026), step=1.0, help='La BDD CENASE actual no contiene una columna de sueldo. Se usa este valor para el control de sueldo fijo proporcional; si luego la BDD incorpora sueldo, la APP podrá tomarlo automáticamente.')
 if f_personal:
-    st.markdown('### 2. Mapeo de Base de Personal')
-    psheet = sheet_selector(f_personal, 'Hoja Base de Personal', 'psheet')
-    f_personal.seek(0)
-    personnel_df = read_tabular_excel(f_personal, psheet)
-    cols = personnel_df.columns
-    a,b,c,d = st.columns(4)
-    with a: personnel_map['id'] = map_select(cols, 'Cédula', 'pid', guesses=('CEDULA','IDENTIFICACION'))
-    with b: personnel_map['name'] = map_select(cols, 'Nombre / trabajador', 'pname', required=True, guesses=('NOMBRE','APELLIDOS','TRABAJADOR'))
-    with c: personnel_map['start'] = map_select(cols, 'Fecha real de ingreso', 'pstart', required=True, guesses=('FECHA INGRESO','INGRESO'))
-    with d: personnel_map['salary'] = map_select(cols, 'Salario básico mensual', 'psalary', required=True, guesses=('SUELDO','SALARIO','BASICO'))
-
+    st.markdown('### 2. Base de Personal CENASE — lectura automática')
+    try:
+        personnel_records = load_cenase_personnel_database(f_personal, default_basic)
+        st.success(f'BDD reconocida automáticamente: {len(personnel_records)} ciclos laborales leídos de ACTIVOS, REINGRESOS e INACTIVOS.')
+        st.caption('La APP identifica por cédula (preferente) o nombre y selecciona el ciclo de ingreso/salida que corresponde a la fecha de la liquidación. Ya no necesitas mapear columnas manualmente.')
+    except Exception as e:
+        st.error(f'No se pudo reconocer la BDD CENASE: {e}')
 
 iess_df = None
 iess_map = {}
@@ -103,12 +102,16 @@ if f_liq:
         items = []
 
     if items:
-        pindex = make_reference_index(personnel_df, personnel_map.get('id'), personnel_map.get('name')) if personnel_df is not None else {}
+        pindex = {}
         iindex = make_reference_index(iess_df, iess_map.get('id'), iess_map.get('name')) if iess_df is not None else {}
 
         enriched = []
         for x in items:
-            prow, p_match = lookup_reference(pindex, x.get('ident',''), x['name']) if pindex else (None,'')
+            prec, p_match = resolve_personnel_record(personnel_records, x.get('ident',''), x['name'], x.get('end')) if personnel_records else (None,'')
+            prow = None
+            if prec:
+                prow = {'NOMBRE':prec['name'],'CEDULA':prec['ident'],'INGRESO':prec['start'],'SALARIO':prec['salary']}
+                personnel_map = {'name':'NOMBRE','id':'CEDULA','start':'INGRESO','salary':'SALARIO'}
             # IESS may have multiple rows/periods; retrieve all by id/name key.
             irows = []
             if iindex:
@@ -121,6 +124,11 @@ if f_liq:
             cross = build_cross_check(x, prow, personnel_map, irows, iess_map)
             x2 = dict(x)
             x2['personnel_match'] = p_match
+            x2['personnel_status'] = prec.get('status','') if prec else ''
+            x2['personnel_source'] = prec.get('source','') if prec else ''
+            x2['personnel_cycle'] = prec.get('cycle','') if prec else ''
+            x2['personnel_exit'] = prec.get('end') if prec else None
+            x2['personnel_motive'] = prec.get('motive','') if prec else ''
             x2.update(cross)
             enriched.append(x2)
 
@@ -131,11 +139,11 @@ if f_liq:
             rh_days = x['reported_total_days']
             date_ok = x['start_date_diff_days'] in (None,0)
             days_ok = abs(rh_days-real_days) <= .01
-            p_ok = bool(x['personnel_match']) if personnel_df is not None else None
+            p_ok = bool(x['personnel_match']) if personnel_records else None
             i_ok = bool(x['iess_checks']) if iess_df is not None else None
             summary_rows.append({
                 'Trabajador': x['name'], 'Ingreso RR.HH.': fmtdate(x['start']), 'Ingreso Base Personal': fmtdate(x['real_start']),
-                'Coincide ingreso': '✅' if date_ok else '⚠️', 'Salario básico': x['basic_salary'],
+                'Coincide ingreso': '✅' if date_ok else '⚠️', 'Estado BDD': x.get('personnel_status','—'), 'Ciclo BDD': x.get('personnel_cycle','—'), 'Salida BDD': fmtdate(x.get('personnel_exit')), 'Salario básico control': x['basic_salary'],
                 'Días RR.HH.': rh_days, 'Días APP': real_days, 'Dif. días': round(rh_days-real_days,2),
                 'D13 RR.HH.': x['reported13'], 'D13 APP': x['calc13'], 'Vac. RR.HH.': x['reported_vac'], 'Vac. APP': x['calc_vac'],
                 'Base personal': '✅ ENCONTRADO' if p_ok else ('⚠️ NO ENCONTRADO' if p_ok is False else '—'),
@@ -144,7 +152,7 @@ if f_liq:
             })
         sdf=pd.DataFrame(summary_rows)
         st.dataframe(sdf, use_container_width=True, hide_index=True,
-                     column_config={'Salario básico':st.column_config.NumberColumn(format='$ %.2f'),
+                     column_config={'Salario básico control':st.column_config.NumberColumn(format='$ %.2f'),
                                     'D13 RR.HH.':st.column_config.NumberColumn(format='$ %.2f'),
                                     'D13 APP':st.column_config.NumberColumn(format='$ %.2f'),
                                     'Vac. RR.HH.':st.column_config.NumberColumn(format='$ %.2f'),
@@ -158,12 +166,14 @@ if f_liq:
         st.dataframe(valdf, use_container_width=True, hide_index=True)
 
         st.markdown('### B. Datos reales de Base de Personal')
-        if personnel_df is None:
+        if not personnel_records:
             st.warning('Sube la Base de Personal para validar fecha real de ingreso y salario básico.')
         elif not x['personnel_match']:
             st.error('No pude enlazar este trabajador con la Base de Personal. Revisa nombre/cédula o el mapeo.')
         else:
-            st.success(f"Coincidencia por {x['personnel_match']} · Ingreso real: {fmtdate(x['real_start'])} · Salario básico: {money(x['basic_salary'])}")
+            st.success(f"Coincidencia por {x['personnel_match']} · Estado: {x.get('personnel_status','')} · {x.get('personnel_cycle','')} · Ingreso real: {fmtdate(x['real_start'])} · Salida BDD: {fmtdate(x.get('personnel_exit'))} · Salario básico control: {money(x['basic_salary'])}")
+            if x.get('personnel_status') == 'REINGRESO': st.warning('🔁 REINGRESO DETECTADO: el cálculo usa el ciclo laboral que corresponde a esta liquidación.')
+            if x.get('personnel_motive'): st.caption(f"Motivo registrado en BDD: {x['personnel_motive']}")
             if x['start_date_diff_days'] not in (None,0):
                 st.error(f"Fecha de ingreso distinta: RR.HH. {fmtdate(x['start'])} vs Base Personal {fmtdate(x['real_start'])}.")
             st.dataframe(pd.DataFrame(x['day_checks_real']), use_container_width=True, hide_index=True,
@@ -206,4 +216,4 @@ if f_liq:
         st.download_button('⬇️ Descargar auditoría integral Excel',bio.getvalue(),'Auditoria_Integral_Liquidaciones_CENASE.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 
 st.divider()
-st.caption('Versión 5.1 | CENASE | 3 controles: RR.HH. vs APP · APP vs IESS · Base de Personal | Febrero completo = 30 días')
+st.caption('Versión 6 | CENASE | RR.HH. vs APP · APP vs IESS · BDD automática ACTIVOS/REINGRESOS/INACTIVOS | Febrero completo = 30 días')
