@@ -1,16 +1,10 @@
-# Verificador de Liquidaciones CENASE v8.4
+# Verificador de Liquidaciones CENASE v8.6
 
-Cambios principales:
-- Décimo tercero de guardias tratado como **MENSUALIZADO**: se muestra diferencia RR.HH. vs APP/IESS, pero **no genera estado REVISAR**, ni por período ni por diferencia monetaria.
-- Vacaciones: único beneficio del bloque que genera control de período en esta fase. Se determina **AÑO COMPLETO** o **PROPORCIONAL AL CESE** según fecha de ingreso real de BDD y fecha de salida de RR.HH.
-- Se mantiene tolerancia monetaria de USD 1,50 para vacaciones y demás controles monetarios que sí aplican.
-- Se mantiene fecha de salida RR.HH. como fecha efectiva para ajustar la base IESS del último mes.
-- Días IESS continúan solo como informativos.
-
-Subir `main.py`, `engine.py` y `requirements.txt` juntos a la raíz del repositorio de Streamlit.
-
-
-## v8.5 — Regla de tolerancia
-- Diferencia absoluta **hasta e incluyendo USD 1,50** en décimo tercero y vacaciones = **✅ CORRECTO**.
-- Vacaciones: solo diferencia monetaria **> USD 1,50** o período vacacional incorrecto = **⚠️ REVISAR**.
-- Décimo tercero mensualizado: si supera USD 1,50 se informa la diferencia, pero no cambia el dictamen a REVISAR.
+Corrección del estado masivo:
+- Décimo tercero mensualizado: siempre informativo; nunca genera REVISAR.
+- Vacaciones: diferencia absoluta <= USD 1,50 = CORRECTO; > USD 1,50 = REVISAR.
+- El período vacacional sí genera REVISAR si no corresponde al ciclo según ingreso BDD + salida RR.HH.
+- Diferencias mensuales de base RR.HH. vs IESS ajustada quedan informativas y no cambian el estado.
+- Diferencias de aportes IESS quedan informativas y no cambian el estado.
+- Días/fechas RR.HH. vs BDD Personal sí pueden generar revisión.
+- Si no se encuentra al trabajador en IESS, se mantiene como revisión porque no existe base monetaria para validar vacaciones.

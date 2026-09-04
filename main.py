@@ -92,7 +92,7 @@ for x in items:
     ident=(prec.get('ident') if prec else '') or x.get('ident','')
     irows=iess_rows_for_employee(iess_df,ident,x['name'])
     legal=legal_benefits_from_iess(real_start,x.get('end'),irows,region,sbu) if irows else {}
-    dayrows=[]; observations=[]; day_observations=[]; period_observations=[]
+    dayrows=[]; observations=[]; info_observations=[]; day_observations=[]; period_observations=[]
     if not prec:
         day_observations.append('No encontrado en BDD Personal: no se puede validar días contra la base de personal')
     if not irows:
@@ -116,7 +116,7 @@ for x in items:
         if rr_days != expected: day_observations.append(f'{m:02d}/{y}: días RR.HH. {rr_days:g} vs días correctos {expected:g} según ingreso BDD + salida RR.HH.')
         # Días IESS son informativos. Para beneficios/base se usa el valor IESS ajustado a los días correctos.
         if ibase_adj is not None and abs(rr_base-ibase_adj)>MONETARY_TOLERANCE:
-            observations.append(f'{m:02d}/{y}: base RR.HH. ${rr_base:.2f} vs IESS ajustada ${ibase_adj:.2f} (IESS reporta ${ibase:.2f} / {idays:g} días; correcto {expected:g} días; dif. ${abs(rr_base-ibase_adj):.2f})')
+            info_observations.append(f'{m:02d}/{y}: base RR.HH. ${rr_base:.2f} vs IESS ajustada ${ibase_adj:.2f} (IESS reporta ${ibase:.2f} / {idays:g} días; correcto {expected:g} días; dif. ${abs(rr_base-ibase_adj):.2f})')
         row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días correctos':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS ajustada a días correctos':ibase_adj,'Dif. RRHH-IESS ajustada':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
         dayrows.append(row); month_rows.append(row)
 
@@ -158,11 +158,12 @@ for x in items:
         base=num(r.get('Sueldo')); calc=iess_contributions(base)
         di=round(num(r.get('Individual'))-calc['personal'],2); dp=round(num(r.get('Patronal'))-calc['patronal'],2)
         contrib_rows.append({'Trabajador':x['name'],'Periodo':r.get('Periodo'),'Días':num(r.get('Días')),'Base IESS':base,'Individual IESS':num(r.get('Individual')),'9,45% APP':calc['personal'],'Dif. personal':di,'Patronal IESS':num(r.get('Patronal')),'11,15% APP':calc['patronal'],'Dif. patronal':dp,'Rel. Trabajo':r.get('Rel. Trabajo')})
-        if abs(di)>MONETARY_TOLERANCE: observations.append(f"{r.get('Periodo')}: aporte individual IESS difiere del 9,45% en ${di:.2f}")
-        if abs(dp)>MONETARY_TOLERANCE: observations.append(f"{r.get('Periodo')}: aporte patronal IESS difiere del 11,15% en ${dp:.2f}")
+        if abs(di)>MONETARY_TOLERANCE: info_observations.append(f"{r.get('Periodo')}: aporte individual IESS difiere del 9,45% en ${di:.2f} (informativo)")
+        if abs(dp)>MONETARY_TOLERANCE: info_observations.append(f"{r.get('Periodo')}: aporte patronal IESS difiere del 11,15% en ${dp:.2f} (informativo)")
 
     # Quitar duplicados conservando orden
     observations=list(dict.fromkeys(observations))
+    info_observations=list(dict.fromkeys(info_observations))
     day_observations=list(dict.fromkeys(day_observations))
     period_observations=list(dict.fromkeys(period_observations))
     money_status='✅ OK' if not observations else '⚠️ REVISAR'
@@ -177,7 +178,7 @@ for x in items:
         'D13 control':'ℹ️ MENSUALIZADO — diferencia informativa','D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
         'Período Vac':(f"{fmtdate(legal.get('vac_period_start'))} - {fmtdate(legal.get('vac_period_end'))} ({legal.get('vac_type','')})" if legal else ''),'Vac RRHH':money(x.get('reported_vac')),'Vac APP/IESS':money(vac) if legal else None,'Dif Vac':round(money(x.get('reported_vac'))-money(vac),2) if legal else None,
         'Nº obs. valores':len(observations),'Nº obs. días':len(day_observations),'Nº obs. períodos':len(period_observations),
-        'Observaciones valores':' | '.join(observations),'Observaciones días':' | '.join(day_observations),'Observaciones períodos':' | '.join([f'{r}: {o}' for r,o in period_observations])
+        'Observaciones valores':' | '.join(observations),'Observaciones informativas IESS':' | '.join(info_observations),'Observaciones días':' | '.join(day_observations),'Observaciones períodos':' | '.join([f'{r}: {o}' for r,o in period_observations])
     })
     for o in observations: obs_rows.append({'Trabajador':x['name'],'Cédula':ident,'Observación':o})
     for o in day_observations: day_obs_rows.append({'Trabajador':x['name'],'Cédula':ident,'Observación de días':o})
@@ -203,7 +204,7 @@ if dodf.empty: st.success('No se detectaron diferencias entre los días de RR.HH
 else: st.dataframe(dodf,use_container_width=True,hide_index=True,height=min(500,80+32*len(dodf)))
 
 st.markdown('### 4. Control de beneficios — D13 informativo y vacaciones auditables')
-st.caption('Guardias: el décimo tercero está mensualizado. Si la diferencia absoluta es hasta USD 1,50 se muestra ✅ CORRECTO; si supera USD 1,50 se muestra solo como diferencia informativa y no genera REVISAR. En vacaciones, diferencias de hasta USD 1,50 también se muestran ✅ CORRECTO; solo una diferencia mayor a USD 1,50 o un período vacacional incorrecto genera revisión.')
+st.caption('Guardias: el décimo tercero es informativo y nunca genera REVISAR. Vacaciones: diferencia absoluta ≤ USD 1,50 = ✅ CORRECTO; solo > USD 1,50 o período vacacional incorrecto genera revisión. Las diferencias mensuales RR.HH.–IESS y de aportes IESS se conservan como información y no cambian el estado final.')
 if podf.empty: st.success('Los períodos de RR.HH. coinciden con los períodos legales aplicables.')
 else: st.dataframe(podf,use_container_width=True,hide_index=True,height=min(500,80+32*len(podf)))
 st.markdown('#### Matriz de períodos por trabajador')
@@ -240,4 +241,4 @@ d1,d2=st.columns(2)
 with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.pdf','application/pdf',use_container_width=True)
 
-st.caption('v8.5 · tolerancia inclusiva ≤ $1,50 = CORRECTO en décimos y vacaciones · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')
+st.caption('v8.6 · estado REVISAR solo por vacaciones > $1,50, período vacacional o días/fechas BDD · D13, diferencias mensuales de base y aportes IESS son informativos')
