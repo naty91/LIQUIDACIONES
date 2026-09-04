@@ -1,19 +1,13 @@
-# Verificador de Liquidaciones CENASE v8 – REPORTE MASIVO
+# Verificador de Liquidaciones CENASE v8.1
 
-Carga simultáneamente:
-1. Liquidaciones RR.HH. (archivo masivo)
-2. BDD de personal.xlsx
-3. IESS BASE.xlsx
+Versión masiva para cargar Liquidaciones RR.HH., BDD de Personal e IESS BASE.
 
-La aplicación procesa todas las liquidaciones de una vez. Ya no obliga a escoger trabajador por trabajador.
+Cambios de control:
+- Tolerancia monetaria: diferencias absolutas de hasta USD 1,50 se consideran aceptables y NO generan revisión.
+- Diferencias mayores a USD 1,50 se muestran en una sección independiente de observaciones monetarias.
+- El control de días se realiza únicamente entre RR.HH. y las fechas/ciclo laboral de la BDD de Personal.
+- Los días del IESS son informativos y NO generan observaciones de días ni afectan el estado por días.
+- Mes completo = 30 días, incluido febrero; meses parciales se calculan sobre base 30.
+- Exporta Excel masivo y PDF con observaciones monetarias y revisión de días separadas.
 
-Salidas:
-- Resumen masivo con estado APTO / REVISAR.
-- Observaciones automáticas.
-- Comparativo mes a mes RR.HH. / APP / IESS.
-- Beneficios calculados.
-- Aportes IESS.
-- Excel masivo con hojas de resumen, observaciones, mes a mes, beneficios, aportes y fichas individuales.
-- PDF masivo.
-
-Criterio de días: mes completo = 30 días, incluido febrero. Mes incompleto = base 30.
+Para Streamlit coloque `main.py`, `engine.py` y `requirements.txt` en la raíz del repositorio.
