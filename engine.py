@@ -857,3 +857,140 @@ def resolve_personnel_record(records, ident='', name='', liquidation_end=None):
     candidates.sort(key=lambda x:x[0], reverse=True)
     r=candidates[0][1]
     return r, ('CÉDULA' if ident_n and r['ident']==ident_n else 'NOMBRE')
+
+# ===================== V7: IESS AUTOMÁTICO + BENEFICIOS POR PERÍODOS LEGALES =====================
+
+def load_iess_cenase(file_obj):
+    """Lee el formato real IESS BASE.xlsx de CENASE sin mapeo manual."""
+    if hasattr(file_obj, 'seek'):
+        file_obj.seek(0)
+    df = pd.read_excel(file_obj, sheet_name='IESS', header=1, dtype=object)
+    df.columns = [str(c).strip() for c in df.columns]
+    required = ['Periodo','Cédula','Nombre','Rel. Trabajo','Sueldo','Días','Patronal','Individual']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError('Faltan columnas esperadas en IESS: ' + ', '.join(missing))
+    df = df[df['Cédula'].notna() | df['Nombre'].notna()].copy()
+    df['Cédula_norm'] = df['Cédula'].map(normalize_id)
+    df['Nombre_norm'] = df['Nombre'].map(normalize_text)
+    df['_period'] = df['Periodo'].map(parse_month_period)
+    return df
+
+
+def iess_rows_for_employee(df, ident='', name=''):
+    if df is None or df.empty:
+        return []
+    identn = normalize_id(ident)
+    namen = normalize_text(name)
+    sub = pd.DataFrame()
+    if identn:
+        sub = df[df['Cédula_norm'] == identn]
+    if sub.empty and namen:
+        sub = df[df['Nombre_norm'] == namen]
+    return sub.to_dict('records') if not sub.empty else []
+
+
+def _period_date(period):
+    if not period or not period[0] or not period[1]:
+        return None
+    return date(int(period[0]), int(period[1]), 1)
+
+
+def _period_in_range(period, start, end):
+    d = _period_date(period)
+    if not d or not start or not end:
+        return False
+    return (d.year, d.month) >= (start.year, start.month) and (d.year, d.month) <= (end.year, end.month)
+
+
+def latest_iess_salary(irows, on_or_before=None):
+    usable=[]
+    for r in irows or []:
+        p = r.get('_period') or parse_month_period(r.get('Periodo'))
+        d = _period_date(p)
+        if d and (on_or_before is None or (d.year,d.month) <= (on_or_before.year,on_or_before.month)):
+            usable.append((d, num(r.get('Sueldo'))))
+    usable.sort(key=lambda x:x[0])
+    return usable[-1][1] if usable else 0.0
+
+
+def sum_iess_base(irows, start, end):
+    total=0.0
+    detail=[]
+    for r in irows or []:
+        p = r.get('_period') or parse_month_period(r.get('Periodo'))
+        if _period_in_range(p, start, end):
+            base=num(r.get('Sueldo'))
+            days=num(r.get('Días'))
+            total += base
+            detail.append({'Periodo':r.get('Periodo'),'Año':p[0] if p else None,'Mes':p[1] if p else None,'Días IESS':days,'Base IESS':round(base,2)})
+    detail.sort(key=lambda z: (z.get('Año') or 0,z.get('Mes') or 0))
+    return round(total,2), detail
+
+
+def vacation_cycles(start: date, end: date, irows):
+    """Ciclos por aniversario. Cada año completo se genera al aniversario siguiente; el último tramo queda proporcional."""
+    if not start or not end or end < start:
+        return []
+    cycles=[]
+    cursor=start
+    n=1
+    while True:
+        try:
+            anniv=date(cursor.year+1,cursor.month,cursor.day)
+        except ValueError:
+            anniv=date(cursor.year+1,cursor.month,28)
+        cycle_end=anniv - pd.Timedelta(days=1)
+        cycle_end = cycle_end.date() if hasattr(cycle_end,'date') else cycle_end
+        if anniv <= end:
+            base, det=sum_iess_base(irows,cursor,cycle_end)
+            cycles.append({'Ciclo':n,'Desde':cursor,'Hasta':cycle_end,'Se genera el':anniv,'Tipo':'AÑO COMPLETO','Base IESS':base,'Vacación teórica':round(base/24,2),'Detalle':det})
+            cursor=anniv
+            n+=1
+        else:
+            base, det=sum_iess_base(irows,cursor,end)
+            cycles.append({'Ciclo':n,'Desde':cursor,'Hasta':end,'Se genera el':None,'Tipo':'PROPORCIONAL AL CESE','Base IESS':base,'Vacación teórica':round(base/24,2),'Detalle':det})
+            break
+    return cycles
+
+
+def legal_benefits_from_iess(start: date, end: date, irows, region='Costa / Insular', sbu=SBU_2026):
+    """Calcula bases legales usando lo efectivamente reportado en IESS como fuente operativa de remuneración."""
+    if not start or not end:
+        return {}
+    # Décimo tercero: período legal 1-dic a 30-nov; al cese se liquida lo acumulado del período corriente.
+    if end.month == 12:
+        d13_start=date(end.year,12,1)
+    else:
+        d13_start=date(end.year-1,12,1)
+    d13_start=max(start,d13_start)
+    d13_base,d13_detail=sum_iess_base(irows,d13_start,end)
+    d13=round(d13_base/12,2)
+
+    # Décimo cuarto: período legal regional; base de 360 días, no base IESS monetaria.
+    p14_start,p14_end=dec14_period(end,region)
+    a=max(start,p14_start); b=min(end,p14_end)
+    d14_days=max(0, min(360, days360_us(a,b)+1)) if b>=a else 0
+    d14=round(num(sbu)/360*d14_days,2)
+
+    vac=vacation_cycles(start,end,irows)
+    current_vac=next((c for c in reversed(vac) if c['Tipo']=='PROPORCIONAL AL CESE'), None)
+    last_salary=latest_iess_salary(irows,end)
+    years=completed_years(start,end)
+    fund_reserve_from=None
+    try:
+        fund_reserve_from=date(start.year+1,start.month,start.day)
+    except ValueError:
+        fund_reserve_from=date(start.year+1,start.month,28)
+    fr_base,fr_detail=(0.0,[])
+    if end >= fund_reserve_from:
+        fr_base,fr_detail=sum_iess_base(irows,fund_reserve_from,end)
+    fund_reserve=round(fr_base/12,2) # 8.33% = 1/12
+    return {
+        'd13_period_start':d13_start,'d13_period_end':end,'d13_base_iess':d13_base,'d13_calc':d13,'d13_detail':d13_detail,
+        'd14_period_start':a,'d14_period_end':b,'d14_days':d14_days,'d14_calc':d14,
+        'vacation_cycles':vac,'vac_current_calc':round(current_vac['Vacación teórica'],2) if current_vac else 0.0,
+        'vac_current_base':round(current_vac['Base IESS'],2) if current_vac else 0.0,
+        'last_iess_salary':round(last_salary,2),'completed_years':years,
+        'fund_reserve_start':fund_reserve_from,'fund_reserve_base_iess':fr_base,'fund_reserve_calc':fund_reserve,'fund_reserve_detail':fr_detail,
+    }

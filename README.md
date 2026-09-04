@@ -1,17 +1,21 @@
-# Verificador Integral de Liquidaciones CENASE v6
+# Verificador Liquidaciones CENASE v7
 
-## Cambios principales
-- Lee automáticamente la BDD real de CENASE: hojas **ACTIVOS**, **REINGRESOS** e **INACTIVOS**.
-- Prioriza cruce por cédula; usa nombre como respaldo.
-- En reingresos selecciona el ciclo laboral que corresponde a la fecha de la liquidación, no el primer ingreso histórico.
-- Muestra estado BDD, ciclo, ingreso, salida y motivo de salida.
-- Febrero completo = 30 días para control de nómina.
-- Mes incompleto: sueldo fijo proporcional = salario básico mensual / 30 × días.
-- Como la BDD suministrada no contiene una columna de sueldo, el salario básico de control queda configurable (por defecto SBU 2026 = USD 482).
-- Mantiene el control RR.HH. vs APP y APP vs IESS.
+Archivos en la raíz de GitHub: `main.py`, `engine.py`, `requirements.txt`.
 
-## Streamlit
-Subir a la raíz del repositorio:
-- main.py
-- engine.py
-- requirements.txt
+Carga 3 archivos:
+1. Liquidaciones masivas RR.HH.
+2. BDD de personal.xlsx (ACTIVOS/REINGRESOS/INACTIVOS)
+3. IESS BASE.xlsx (hoja IESS, encabezados en fila 2)
+
+Cambios v7:
+- IESS se reconoce sin mapeo manual.
+- Cruce por cédula + período, nombre como respaldo.
+- Fecha real de ingreso/ciclo desde BDD Personal.
+- Mes completo = 30 días, incluido febrero.
+- Vacaciones por aniversario de ingreso; muestra años completos y proporcional vigente.
+- Décimo tercero por período legal 1-dic/30-nov usando las bases IESS del período.
+- Décimo cuarto por período regional y SBU.
+- Fondos de reserva desde el primer aniversario como control general.
+- Aportes IESS: 9,45% personal y 11,15% patronal para relación privada ordinaria.
+
+Nota: los ciclos completos de vacaciones deben contrastarse con registro de vacaciones gozadas/pagadas para determinar saldo pendiente real. La app no inventa ese dato.

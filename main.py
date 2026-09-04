@@ -3,217 +3,117 @@ import io
 from datetime import date, datetime
 import pandas as pd
 import streamlit as st
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from engine import *
 
-from engine import (
-    extract_cenase_batch, money, read_tabular_excel, make_reference_index,
-    lookup_reference, build_cross_check, normalize_text, normalize_id,
-    IESS_PERSONAL_RATE, IESS_EMPLOYER_RATE, IESS_TOTAL_RATE,
-    load_cenase_personnel_database, resolve_personnel_record, SBU_2026,
-)
+st.set_page_config(page_title='Verificador Liquidaciones CENASE v7', page_icon='✅', layout='wide')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v7')
+st.caption('RR.HH. vs APP · IESS como base real reportada · BDD Personal para ciclos laborales · períodos legales por beneficio')
+st.info('Días de nómina: mes completo = 30 días, incluido febrero. Mes incompleto: sueldo mensual ÷ 30 × días. La fecha de ingreso se toma de la BDD Personal cuando existe coincidencia; el IESS se usa como base real reportada de remuneraciones y aportes.')
 
-st.set_page_config(page_title='Verificador Integral de Liquidaciones | CENASE', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE')
-st.caption('Control masivo en 3 capas: RR.HH. vs APP legal · APP vs IESS · Datos vs Base de Personal.')
+def fmtdate(v): return v.strftime('%d/%m/%Y') if isinstance(v,(date,datetime)) else str(v or '')
 
-st.info(
-    'Regla de días: para nómina se trabaja sobre 30 días. Febrero, aunque tenga 28 o 29 días calendario, '
-    'se considera 30 cuando el mes es completo. En meses incompletos el sueldo fijo se prorratea: '
-    'salario básico mensual ÷ 30 × días que corresponden.'
-)
+c1,c2,c3=st.columns(3)
+with c1: f_liq=st.file_uploader('📤 Liquidaciones RR.HH. (masivo)',type=['xlsx','xlsm'],key='liq')
+with c2: f_personal=st.file_uploader('👥 BDD de personal.xlsx',type=['xlsx','xlsm'],key='per')
+with c3: f_iess=st.file_uploader('🏛️ IESS BASE.xlsx',type=['xlsx'],key='iess')
 
+region=st.selectbox('Región para décimo cuarto',['Costa / Insular','Sierra / Amazonía'])
+sbu=st.number_input('SBU para décimo cuarto',min_value=0.0,value=float(SBU_2026),step=1.0)
 
-def fmtdate(v):
-    return v.strftime('%d/%m/%Y') if isinstance(v, (date, datetime)) else str(v or '')
-
-
-def sheet_selector(uploaded, label, key):
-    xls = pd.ExcelFile(uploaded)
-    sheet = st.selectbox(label, xls.sheet_names, key=key)
-    uploaded.seek(0)
-    return sheet
-
-
-def map_select(cols, label, key, required=False, guesses=()):
-    options = ['— NO USAR —'] + list(cols)
-    default = 0
-    for g in guesses:
-        for i, c in enumerate(options):
-            if g in normalize_text(c):
-                default = i
-                break
-        if default:
-            break
-    val = st.selectbox(label, options, index=default, key=key)
-    if required and val == '— NO USAR —':
-        st.warning(f'Selecciona: {label}')
-    return None if val == '— NO USAR —' else val
-
-
-st.markdown('### 1. Archivos de control')
-c1, c2, c3 = st.columns(3)
-with c1:
-    f_liq = st.file_uploader('📤 Liquidaciones RR.HH. (masivo)', type=['xlsx','xlsm'], key='liq')
-with c2:
-    f_personal = st.file_uploader('👥 Base de Personal', type=['xlsx','xlsm','xls'], key='personal')
-with c3:
-    f_iess = st.file_uploader('🏛️ Reporte / Base IESS', type=['xlsx','xlsm','xls'], key='iess')
-
-personnel_df = None
-personnel_map = {}
-personnel_records = []
-default_basic = st.number_input('Salario básico mensual de control para días incompletos', min_value=0.0, value=float(SBU_2026), step=1.0, help='La BDD CENASE actual no contiene una columna de sueldo. Se usa este valor para el control de sueldo fijo proporcional; si luego la BDD incorpora sueldo, la APP podrá tomarlo automáticamente.')
+personnel=[]; iess_df=None
 if f_personal:
-    st.markdown('### 2. Base de Personal CENASE — lectura automática')
     try:
-        personnel_records = load_cenase_personnel_database(f_personal, default_basic)
-        st.success(f'BDD reconocida automáticamente: {len(personnel_records)} ciclos laborales leídos de ACTIVOS, REINGRESOS e INACTIVOS.')
-        st.caption('La APP identifica por cédula (preferente) o nombre y selecciona el ciclo de ingreso/salida que corresponde a la fecha de la liquidación. Ya no necesitas mapear columnas manualmente.')
-    except Exception as e:
-        st.error(f'No se pudo reconocer la BDD CENASE: {e}')
-
-iess_df = None
-iess_map = {}
+        personnel=load_cenase_personnel_database(f_personal,SBU_2026)
+        st.success(f'BDD Personal reconocida: {len(personnel)} ciclos de ACTIVOS / REINGRESOS / INACTIVOS.')
+    except Exception as e: st.error(f'BDD Personal: {e}')
 if f_iess:
-    st.markdown('### 3. Mapeo de IESS')
-    isheet = sheet_selector(f_iess, 'Hoja IESS', 'isheet')
-    f_iess.seek(0)
-    iess_df = read_tabular_excel(f_iess, isheet)
-    cols = iess_df.columns
-    a,b,c,d = st.columns(4)
-    with a: iess_map['id'] = map_select(cols, 'Cédula IESS', 'iid', guesses=('CEDULA','IDENTIFICACION'))
-    with b: iess_map['name'] = map_select(cols, 'Nombre IESS', 'iname', guesses=('NOMBRE','AFILIADO','EMPLEADO'))
-    with c: iess_map['period'] = map_select(cols, 'Período / mes', 'iperiod', guesses=('PERIODO','MES'))
-    with d: iess_map['days'] = map_select(cols, 'Días IESS', 'idays', guesses=('DIAS','DIA'))
-    a,b,c = st.columns(3)
-    with a: iess_map['base'] = map_select(cols, 'Materia gravada / sueldo IESS', 'ibase', guesses=('MATERIA GRAVADA','SUELDO','BASE APORTACION','BASE'))
-    with b: iess_map['personal'] = map_select(cols, 'Aporte personal reportado', 'ipersonal', guesses=('APORTE PERSONAL','PERSONAL'))
-    with c: iess_map['patronal'] = map_select(cols, 'Aporte patronal reportado', 'ipatronal', guesses=('APORTE PATRONAL','PATRONAL'))
-
+    try:
+        iess_df=load_iess_cenase(f_iess)
+        st.success(f'IESS reconocido automáticamente: {len(iess_df):,} registros. Cruce por cédula y período.')
+    except Exception as e: st.error(f'IESS: {e}')
 
 if f_liq:
-    try:
-        items = extract_cenase_batch(f_liq)
+    try: items=extract_cenase_batch(f_liq)
     except Exception as e:
-        st.error(f'No se pudo leer el archivo de liquidaciones: {e}')
-        items = []
+        st.error(f'Liquidaciones: {e}'); items=[]
+    enriched=[]
+    for x in items:
+        prec,pmatch=resolve_personnel_record(personnel,x.get('ident',''),x['name'],x.get('end')) if personnel else (None,'')
+        real_start=prec.get('start') if prec and prec.get('start') else x.get('start')
+        ident=(prec.get('ident') if prec else '') or x.get('ident','')
+        irows=iess_rows_for_employee(iess_df,ident,x['name']) if iess_df is not None else []
+        legal=legal_benefits_from_iess(real_start,x.get('end'),irows,region,sbu) if irows else {}
+        # Recalcular días contra fecha real BDD.
+        dayrows=[]
+        for rr in x.get('rows',[]):
+            m=_month_num(rr.get('Mes')); y=int(rr.get('Año inferido') or x['end'].year)
+            expected=_payroll_days_for_month(real_start,x['end'],y,m) if m else 0
+            # hallar IESS mismo periodo
+            imatch=[z for z in irows if (z.get('_period') or parse_month_period(z.get('Periodo'))) == (y,m)]
+            idays=num(imatch[0].get('Días')) if imatch else None
+            ibase=num(imatch[0].get('Sueldo')) if imatch else None
+            dayrows.append({'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':num(rr.get('Días')),'Días APP':expected,'Días IESS':idays,'Base RR.HH.':num(rr.get('Remuneración computable')),'Base IESS':ibase,'Dif. base RRHH-IESS':round(num(rr.get('Remuneración computable'))-(ibase or 0),2) if ibase is not None else None})
+        x2=dict(x); x2.update({'prec':prec,'pmatch':pmatch,'real_start':real_start,'irows':irows,'legal':legal,'dayrows':dayrows})
+        enriched.append(x2)
 
-    if items:
-        pindex = {}
-        iindex = make_reference_index(iess_df, iess_map.get('id'), iess_map.get('name')) if iess_df is not None else {}
-
-        enriched = []
-        for x in items:
-            prec, p_match = resolve_personnel_record(personnel_records, x.get('ident',''), x['name'], x.get('end')) if personnel_records else (None,'')
-            prow = None
-            if prec:
-                prow = {'NOMBRE':prec['name'],'CEDULA':prec['ident'],'INGRESO':prec['start'],'SALARIO':prec['salary']}
-                personnel_map = {'name':'NOMBRE','id':'CEDULA','start':'INGRESO','salary':'SALARIO'}
-            # IESS may have multiple rows/periods; retrieve all by id/name key.
-            irows = []
-            if iindex:
-                key_id = f"ID:{normalize_id(x.get('ident',''))}" if normalize_id(x.get('ident','')) else None
-                key_nm = f"NM:{normalize_text(x['name'])}"
-                if key_id and key_id in iindex:
-                    irows = iindex[key_id]
-                elif key_nm in iindex:
-                    irows = iindex[key_nm]
-            cross = build_cross_check(x, prow, personnel_map, irows, iess_map)
-            x2 = dict(x)
-            x2['personnel_match'] = p_match
-            x2['personnel_status'] = prec.get('status','') if prec else ''
-            x2['personnel_source'] = prec.get('source','') if prec else ''
-            x2['personnel_cycle'] = prec.get('cycle','') if prec else ''
-            x2['personnel_exit'] = prec.get('end') if prec else None
-            x2['personnel_motive'] = prec.get('motive','') if prec else ''
-            x2.update(cross)
-            enriched.append(x2)
-
-        st.markdown('### 4. Resumen integral')
-        summary_rows=[]
+    if enriched:
+        st.markdown('### Resumen masivo')
+        rows=[]
         for x in enriched:
-            real_days = sum(r['Días APP según base personal'] for r in x['day_checks_real']) if x['day_checks_real'] else x['expected_days']
-            rh_days = x['reported_total_days']
-            date_ok = x['start_date_diff_days'] in (None,0)
-            days_ok = abs(rh_days-real_days) <= .01
-            p_ok = bool(x['personnel_match']) if personnel_records else None
-            i_ok = bool(x['iess_checks']) if iess_df is not None else None
-            summary_rows.append({
-                'Trabajador': x['name'], 'Ingreso RR.HH.': fmtdate(x['start']), 'Ingreso Base Personal': fmtdate(x['real_start']),
-                'Coincide ingreso': '✅' if date_ok else '⚠️', 'Estado BDD': x.get('personnel_status','—'), 'Ciclo BDD': x.get('personnel_cycle','—'), 'Salida BDD': fmtdate(x.get('personnel_exit')), 'Salario básico control': x['basic_salary'],
-                'Días RR.HH.': rh_days, 'Días APP': real_days, 'Dif. días': round(rh_days-real_days,2),
-                'D13 RR.HH.': x['reported13'], 'D13 APP': x['calc13'], 'Vac. RR.HH.': x['reported_vac'], 'Vac. APP': x['calc_vac'],
-                'Base personal': '✅ ENCONTRADO' if p_ok else ('⚠️ NO ENCONTRADO' if p_ok is False else '—'),
-                'IESS': '✅ ENCONTRADO' if i_ok else ('⚠️ NO ENCONTRADO' if i_ok is False else '—'),
-                'Estado RRHH vs APP': '✅' if x['failures']==0 and days_ok and date_ok else '⚠️ REVISAR',
-            })
-        sdf=pd.DataFrame(summary_rows)
-        st.dataframe(sdf, use_container_width=True, hide_index=True,
-                     column_config={'Salario básico control':st.column_config.NumberColumn(format='$ %.2f'),
-                                    'D13 RR.HH.':st.column_config.NumberColumn(format='$ %.2f'),
-                                    'D13 APP':st.column_config.NumberColumn(format='$ %.2f'),
-                                    'Vac. RR.HH.':st.column_config.NumberColumn(format='$ %.2f'),
-                                    'Vac. APP':st.column_config.NumberColumn(format='$ %.2f')})
+            lg=x['legal']; iok=bool(x['irows']); pok=bool(x['prec'])
+            d13=lg.get('d13_calc',0); vac=lg.get('vac_current_calc',0)
+            rows.append({'Trabajador':x['name'],'Ingreso RR.HH.':fmtdate(x['start']),'Ingreso BDD':fmtdate(x['real_start']),'BDD':'✅' if pok else '⚠️','IESS':'✅' if iok else '⚠️','D13 RR.HH.':x['reported13'],'D13 APP/IESS':d13,'Dif. D13':round(x['reported13']-d13,2),'Vac RR.HH.':x['reported_vac'],'Vac proporcional APP/IESS':vac,'Dif. Vac':round(x['reported_vac']-vac,2)})
+        sdf=pd.DataFrame(rows)
+        st.dataframe(sdf,use_container_width=True,hide_index=True)
 
-        sel=st.selectbox('🔎 Revisar trabajador', [x['name'] for x in enriched])
-        x=next(v for v in enriched if v['name']==sel)
-        st.markdown('### A. RR.HH. vs APP (Calculadora/criterio legal)')
-        st.write(f"Ingreso RR.HH.: **{fmtdate(x['start'])}** · Salida: **{fmtdate(x['end'])}** · Días RR.HH.: **{x['reported_total_days']}**")
-        valdf=pd.DataFrame([{'Rubro':a,'RR.HH.':b,'APP':c,'Diferencia':round(b-c,2),'Resultado':'✅ CORRECTO' if ok else '⚠️ REVISAR'} for a,b,c,ok in x['checks']])
-        st.dataframe(valdf, use_container_width=True, hide_index=True)
+        sel=st.selectbox('🔎 Revisar trabajador',[x['name'] for x in enriched])
+        x=next(z for z in enriched if z['name']==sel); lg=x['legal']
+        st.markdown('### 1. Identidad y ciclo laboral')
+        a,b,c,d=st.columns(4)
+        a.metric('Ingreso RR.HH.',fmtdate(x['start'])); b.metric('Ingreso real BDD',fmtdate(x['real_start'])); c.metric('Salida',fmtdate(x['end'])); d.metric('Estado BDD',x['prec'].get('status','NO ENCONTRADO') if x['prec'] else 'NO ENCONTRADO')
+        if x['prec'] and x['prec'].get('status')=='REINGRESO': st.warning('🔁 REINGRESO DETECTADO: se usa el ciclo laboral aplicable a esta salida.')
 
-        st.markdown('### B. Datos reales de Base de Personal')
-        if not personnel_records:
-            st.warning('Sube la Base de Personal para validar fecha real de ingreso y salario básico.')
-        elif not x['personnel_match']:
-            st.error('No pude enlazar este trabajador con la Base de Personal. Revisa nombre/cédula o el mapeo.')
+        st.markdown('### 2. Mes a mes: RR.HH. vs APP vs IESS')
+        st.dataframe(pd.DataFrame(x['dayrows']),use_container_width=True,hide_index=True)
+        st.caption('IESS es la referencia real reportada para días, sueldo/materia gravada y aportaciones. La APP controla además los días que corresponden según la fecha real de ingreso/salida.')
+
+        st.markdown('### 3. Beneficios calculados por período legal')
+        if not lg:
+            st.error('No hay registros IESS vinculados; no se emite cálculo monetario legal basado en IESS.')
         else:
-            st.success(f"Coincidencia por {x['personnel_match']} · Estado: {x.get('personnel_status','')} · {x.get('personnel_cycle','')} · Ingreso real: {fmtdate(x['real_start'])} · Salida BDD: {fmtdate(x.get('personnel_exit'))} · Salario básico control: {money(x['basic_salary'])}")
-            if x.get('personnel_status') == 'REINGRESO': st.warning('🔁 REINGRESO DETECTADO: el cálculo usa el ciclo laboral que corresponde a esta liquidación.')
-            if x.get('personnel_motive'): st.caption(f"Motivo registrado en BDD: {x['personnel_motive']}")
-            if x['start_date_diff_days'] not in (None,0):
-                st.error(f"Fecha de ingreso distinta: RR.HH. {fmtdate(x['start'])} vs Base Personal {fmtdate(x['real_start'])}.")
-            st.dataframe(pd.DataFrame(x['day_checks_real']), use_container_width=True, hide_index=True,
-                         column_config={'Salario básico mensual':st.column_config.NumberColumn(format='$ %.2f'),
-                                        'Sueldo proporcional APP':st.column_config.NumberColumn(format='$ %.2f')})
-            st.caption('Mes completo = 30 días, incluido febrero. Si el mes es incompleto: salario básico mensual ÷ 30 × días aplicables.')
+            ben=pd.DataFrame([
+                {'Rubro':'Décimo tercero','Período':f"{fmtdate(lg['d13_period_start'])} a {fmtdate(lg['d13_period_end'])}",'Base IESS':lg['d13_base_iess'],'APP/IESS':lg['d13_calc'],'RR.HH.':x['reported13'],'Diferencia':round(x['reported13']-lg['d13_calc'],2)},
+                {'Rubro':'Décimo cuarto','Período':f"{fmtdate(lg['d14_period_start'])} a {fmtdate(lg['d14_period_end'])}",'Base IESS':None,'APP/IESS':lg['d14_calc'],'RR.HH.':0,'Diferencia':None},
+                {'Rubro':'Vacaciones proporcionales del ciclo vigente','Período':'Desde último aniversario hasta cese','Base IESS':lg['vac_current_base'],'APP/IESS':lg['vac_current_calc'],'RR.HH.':x['reported_vac'],'Diferencia':round(x['reported_vac']-lg['vac_current_calc'],2)},
+                {'Rubro':'Fondos de reserva desde 1er aniversario','Período':f"Desde {fmtdate(lg['fund_reserve_start'])}",'Base IESS':lg['fund_reserve_base_iess'],'APP/IESS':lg['fund_reserve_calc'],'RR.HH.':None,'Diferencia':None},
+            ])
+            st.dataframe(ben,use_container_width=True,hide_index=True)
 
-        st.markdown('### C. APP vs IESS')
-        st.caption('Tasas sector privado bajo relación de dependencia: aporte personal 9,45% + patronal 11,15% = 20,60%.')
-        if iess_df is None:
-            st.warning('Sube el archivo IESS para comparar días, materia gravada y aportaciones.')
-        elif not x['iess_checks']:
-            st.error('No encontré registros IESS vinculados a este trabajador. Revisa nombre/cédula o el mapeo.')
-        else:
-            st.dataframe(pd.DataFrame(x['iess_checks']), use_container_width=True, hide_index=True,
-                         column_config={c:st.column_config.NumberColumn(c,format='$ %.2f') for c in [
-                             'Materia gravada IESS','Sueldo proporcional básico APP','Aporte personal IESS','Aporte personal APP 9,45%',
-                             'Aporte patronal IESS','Aporte patronal APP 11,15%','Total aporte APP 20,60%']})
-            st.info('La materia gravada IESS puede incluir horas extra, recargos y otros rubros gravados. Por eso la APP muestra también el sueldo fijo proporcional como control separado, sin reemplazar automáticamente la materia gravada reportada.')
+            st.markdown('### 4. Vacaciones por aniversario')
+            vrows=[]
+            for c in lg['vacation_cycles']:
+                vrows.append({'Ciclo':c['Ciclo'],'Desde':fmtdate(c['Desde']),'Hasta':fmtdate(c['Hasta']),'Se genera el':fmtdate(c['Se genera el']),'Tipo':c['Tipo'],'Base IESS':c['Base IESS'],'Vacación teórica':c['Vacación teórica']})
+            st.dataframe(pd.DataFrame(vrows),use_container_width=True,hide_index=True)
+            st.info('Ejemplo de lógica: ingreso 01/01/2025 → el primer año de vacaciones se genera el 01/01/2026. El siguiente ciclo inicia ese mismo 01/01/2026. Para liquidar, la APP muestra el proporcional del ciclo vigente y también los ciclos completos para verificar si ya fueron gozados o pagados.')
 
-        # Excel output
+            st.markdown('### 5. Aportes IESS')
+            iout=[]
+            for r in x['irows']:
+                p=r.get('_period') or parse_month_period(r.get('Periodo'))
+                if not _period_in_range(p,x['real_start'],x['end']): continue
+                base=num(r.get('Sueldo')); calc=iess_contributions(base)
+                iout.append({'Periodo':r.get('Periodo'),'Días':num(r.get('Días')),'Base IESS':base,'Individual IESS':num(r.get('Individual')),'9,45% APP':calc['personal'],'Dif. personal':round(num(r.get('Individual'))-calc['personal'],2),'Patronal IESS':num(r.get('Patronal')),'11,15% APP':calc['patronal'],'Dif. patronal':round(num(r.get('Patronal'))-calc['patronal'],2),'Rel. Trabajo':r.get('Rel. Trabajo')})
+            st.dataframe(pd.DataFrame(iout),use_container_width=True,hide_index=True)
+
         bio=io.BytesIO()
         with pd.ExcelWriter(bio,engine='openpyxl') as wr:
             sdf.to_excel(wr,index=False,sheet_name='RESUMEN')
-            for i,x in enumerate(enriched,1):
-                sn=f'R{i:02d}'
-                pd.DataFrame([{'Rubro':a,'RRHH':b,'APP':c,'Diferencia':round(b-c,2),'Resultado':'OK' if ok else 'REVISAR'} for a,b,c,ok in x['checks']]).to_excel(wr,index=False,sheet_name=sn,startrow=0)
-                r0=len(x['checks'])+3
-                pd.DataFrame(x['day_checks_real']).to_excel(wr,index=False,sheet_name=sn,startrow=r0)
-                r1=r0+len(x['day_checks_real'])+3
-                pd.DataFrame(x['iess_checks']).to_excel(wr,index=False,sheet_name=sn,startrow=r1)
-            for ws in wr.book.worksheets:
-                ws.freeze_panes='A2'
-                for cell in ws[1]:
-                    cell.font=cell.font.copy(bold=True)
-                    cell.fill=cell.fill.copy(fill_type='solid',fgColor='C6E0B4')
-                for col in ws.columns:
-                    letter=col[0].column_letter
-                    ws.column_dimensions[letter].width=min(max([len(str(c.value or '')) for c in col]+[10])+2,38)
-        st.download_button('⬇️ Descargar auditoría integral Excel',bio.getvalue(),'Auditoria_Integral_Liquidaciones_CENASE.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
+            for n,x in enumerate(enriched,1):
+                sn=f'R{n:02d}'
+                pd.DataFrame(x['dayrows']).to_excel(wr,index=False,sheet_name=sn)
+                if x['legal']:
+                    pd.DataFrame([{k:v for k,v in c.items() if k!='Detalle'} for c in x['legal']['vacation_cycles']]).to_excel(wr,index=False,sheet_name=sn,startrow=len(x['dayrows'])+3)
+        st.download_button('⬇️ Descargar auditoría v7 en Excel',bio.getvalue(),'Auditoria_Liquidaciones_CENASE_v7.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 
 st.divider()
-st.caption('Versión 6 | CENASE | RR.HH. vs APP · APP vs IESS · BDD automática ACTIVOS/REINGRESOS/INACTIVOS | Febrero completo = 30 días')
+st.caption('v7 · IESS automático · BDD Personal automática · vacaciones por aniversario · D13/D14 por período legal · control 30 días')
