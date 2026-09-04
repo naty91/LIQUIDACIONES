@@ -914,29 +914,39 @@ def latest_iess_salary(irows, on_or_before=None):
     return usable[-1][1] if usable else 0.0
 
 
-def adjusted_iess_base_for_days(base, iess_days, correct_days):
-    """Ajusta la base IESS a los días correctos del vínculo laboral.
+def adjusted_iess_base_for_days(base, iess_days, max_days_by_dates):
+    """Devuelve la base IESS utilizable sin inflar meses realmente trabajados por menos días.
 
-    Se conserva el valor diario implícito del IESS y se sustituye únicamente la cantidad
-    de días por la que corresponde según fecha real de ingreso y fecha de salida de la
-    liquidación. Ej.: IESS $482 / 30 días x 27 días correctos = $433,80.
+    Regla CENASE:
+    - Un mes completo tiene tope 30 días (febrero 28/29 y meses de 31 se tratan como 30).
+    - La fecha de ingreso BDD y la fecha de salida RR.HH. fijan el MÁXIMO de días posibles.
+    - Si IESS reporta MENOS días que ese máximo (faltas, ingreso parcial u otra novedad),
+      se conserva íntegramente la base IESS: nunca se aumenta artificialmente.
+    - Solo si IESS reporta MÁS días que los permitidos por la fecha de salida/ingreso,
+      se reduce proporcionalmente la base al máximo permitido.
+
+    Ejemplos:
+      IESS $238,22 / 14 días, máximo por fechas 28 -> se conserva $238,22.
+      IESS $290,13 / 17 días, máximo por fechas 30 -> se conserva $290,13.
+      IESS $482 / 30 días, salida RR.HH. día 27 -> $482/30*27 = $433,80.
     """
     base = num(base)
-    iess_days = num(iess_days)
-    correct_days = max(0.0, min(30.0, num(correct_days)))
-    if base == 0 or correct_days == 0:
+    iess_days = max(0.0, min(30.0, num(iess_days)))
+    max_days = max(0.0, min(30.0, num(max_days_by_dates)))
+    if base == 0 or max_days == 0:
         return 0.0
-    divisor = iess_days if iess_days > 0 else 30.0
-    return round((base / divisor) * correct_days, 2)
+    # Nunca escalar hacia arriba una base IESS por días efectivamente inferiores.
+    if iess_days <= 0 or iess_days <= max_days:
+        return round(base, 2)
+    # Solo recortar cuando IESS excede los días máximos permitidos por las fechas laborales.
+    return round((base / iess_days) * max_days, 2)
 
 
 def sum_iess_base(irows, start, end):
-    """Suma bases IESS ajustadas a los días correctos del período.
+    """Suma bases IESS respetando días reales y recortando únicamente excesos por fechas.
 
-    La fecha de salida que llega en ``end`` manda para el último mes. Esto permite usar
-    la base legal reportada por IESS, pero corrigiendo sus días cuando el aviso de salida
-    aún refleja un mes completo. También prorratea correctamente meses de inicio/cierre
-    de ciclos de vacaciones, décimos y fondos de reserva.
+    La fecha de ingreso BDD y la salida RR.HH. fijan el máximo de días posibles de cada mes.
+    Si IESS tiene menos días, su base se conserva; si tiene más que el máximo, se recorta.
     """
     total=0.0
     detail=[]
@@ -952,8 +962,8 @@ def sum_iess_base(irows, start, end):
             total += adj_base
             detail.append({
                 'Periodo':r.get('Periodo'),'Año':y,'Mes':m,
-                'Días IESS':days,'Días correctos':correct_days,
-                'Base IESS reportada':round(base,2),'Base IESS ajustada':adj_base,
+                'Días IESS':days,'Días máximos por fechas':correct_days,
+                'Base IESS reportada':round(base,2),'Base IESS utilizable':adj_base,
                 'Ajuste':round(adj_base-base,2)
             })
     detail.sort(key=lambda z: (z.get('Año') or 0,z.get('Mes') or 0))
@@ -1139,7 +1149,7 @@ def legal_benefits_from_iess(start: date, end: date, irows, region='Costa / Insu
     - D13: 1-dic / 30-nov, proporcional si ingreso/salida recortan el período.
     - D14: período regional, proporcional por tiempo aplicable.
     - Vacaciones: ciclo individual por aniversario de la fecha de ingreso.
-    Las bases monetarias usan IESS ajustado a los días correctos del tramo.
+    Las bases monetarias conservan el IESS cuando reporta menos días y solo se recortan si exceden el máximo permitido por ingreso/salida.
     """
     if not start or not end or end < start:
         return {}

@@ -1,10 +1,19 @@
-# Verificador de Liquidaciones CENASE v8.6
+# Verificador de Liquidaciones CENASE v8.7
 
-Corrección del estado masivo:
-- Décimo tercero mensualizado: siempre informativo; nunca genera REVISAR.
-- Vacaciones: diferencia absoluta <= USD 1,50 = CORRECTO; > USD 1,50 = REVISAR.
-- El período vacacional sí genera REVISAR si no corresponde al ciclo según ingreso BDD + salida RR.HH.
-- Diferencias mensuales de base RR.HH. vs IESS ajustada quedan informativas y no cambian el estado.
-- Diferencias de aportes IESS quedan informativas y no cambian el estado.
-- Días/fechas RR.HH. vs BDD Personal sí pueden generar revisión.
-- Si no se encuentra al trabajador en IESS, se mantiene como revisión porque no existe base monetaria para validar vacaciones.
+## Regla de días corregida
+- Para nómina, un mes completo siempre equivale a 30 días, incluso febrero (28/29) y meses de 31 días.
+- La fecha de ingreso de la BDD y la fecha de salida de RR.HH. determinan el **máximo** de días posibles del mes.
+- Si RR.HH./IESS reportan menos días por trabajo efectivo, faltas u otra novedad, **no se completan ni se inflan**.
+- La base IESS se conserva si sus días son menores o iguales al máximo permitido.
+- Solo se recorta la base IESS cuando IESS reporta más días que los posibles según la salida de RR.HH.
+
+### Ejemplos validados
+- MORAN ITURRALDE JAEL BYRON: enero 14 días / $238,22 y febrero 17 días / $290,13 se conservan. Vacaciones: $3.665,53 / 24 = $152,73.
+- REYES CIRINO JORGE ALFREDO: agosto IESS $482 / 30 días, salida 27/08 -> base utilizable $433,80.
+
+## Criterios vigentes
+- Décimo tercero de guardias: informativo; no genera REVISAR.
+- Vacaciones: se revisan por ciclo desde fecha de ingreso BDD hasta salida RR.HH.
+- Diferencias de vacaciones y décimos hasta USD 1,50 inclusive = CORRECTO.
+- Días IESS son informativos.
+- Salida RR.HH. manda; una diferencia con la salida BDD se informa, pero no bloquea.

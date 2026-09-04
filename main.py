@@ -11,10 +11,10 @@ from engine import *
 from engine import (_month_num, _payroll_days_for_month, _period_in_range,
                     rrhh_periods_from_item, period_set_check, fmt_period_months, month_sequence)
 
-st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.3.1', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.3.1')
+st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.7', page_icon='✅', layout='wide')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.7')
 st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · control legal de PERÍODOS · tolerancia ±$1,50')
-st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia. Para guardias, el décimo tercero se trata como mensualizado: se muestra únicamente la diferencia informativa y NO genera estado REVISAR. Las vacaciones sí se auditan por fecha real de ingreso BDD y fecha de salida RR.HH., determinando si corresponde vacación completa o proporcional.')
+st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se conserva cuando reporta menos días por trabajo efectivo y solo se recorta si excede el máximo permitido por la fecha de ingreso/salida; los días IESS quedan como referencia. Para guardias, el décimo tercero se trata como mensualizado: se muestra únicamente la diferencia informativa y NO genera estado REVISAR. Las vacaciones sí se auditan por fecha real de ingreso BDD y fecha de salida RR.HH., determinando si corresponde vacación completa o proporcional.')
 
 def fmtdate(v):
     return v.strftime('%d/%m/%Y') if isinstance(v,(date,datetime)) else str(v or '')
@@ -30,11 +30,11 @@ def make_pdf(summary_df, obs_df, day_obs_df, period_obs_df):
     story.append(Paragraph('CENASE – Auditoría Masiva de Liquidaciones',styles['Title']))
     story.append(Paragraph('Comparación: RR.HH. vs APP vs IESS vs BDD Personal',styles['Normal']))
     story.append(Spacer(1,8))
-    cols=['Trabajador','Estado','Ingreso RRHH','Ingreso BDD','Días RRHH','Días BDD','D13 RRHH','D13 APP/IESS','Vac RRHH','Vac APP/IESS']
+    cols=['Trabajador','Estado','Ingreso RRHH','Ingreso BDD','Días RRHH','Días máximos por fechas','D13 RRHH','D13 APP/IESS','Vac RRHH','Vac APP/IESS']
     data=[cols]
     for _,r in summary_df.iterrows():
         data.append([str(r.get(c,''))[:26] for c in cols])
-    t=Table(data,repeatRows=1,colWidths=[135,80,66,66,52,52,62,72,62,72])
+    t=Table(data,repeatRows=1,colWidths=[135,80,66,66,52,78,62,72,62,72])
     t.setStyle(TableStyle([
         ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
         ('FONTSIZE',(0,0),(-1,-1),6.4),('GRID',(0,0),(-1,-1),0.25,colors.grey),
@@ -101,7 +101,9 @@ for x in items:
     if prec and x.get('start') and real_start and x.get('start') != real_start:
         day_observations.append(f"Fecha ingreso difiere: RR.HH. {fmtdate(x.get('start'))} / BDD {fmtdate(real_start)}")
     if prec and prec.get('end') and x.get('end') and prec.get('end') != x.get('end'):
-        day_observations.append(f"Fecha salida difiere: RR.HH. {fmtdate(x.get('end'))} / BDD {fmtdate(prec.get('end'))}")
+        # La salida de RR.HH. manda para la liquidación. La diferencia con BDD se informa para depuración,
+        # pero no bloquea la liquidación ni altera los días/base usados en beneficios.
+        info_observations.append(f"Fecha salida BDD difiere: RR.HH. {fmtdate(x.get('end'))} / BDD {fmtdate(prec.get('end'))}. Para la liquidación se usa RR.HH.")
 
     total_rr=0; total_app=0; total_iess=0
     for rr in x.get('rows',[]):
@@ -113,11 +115,19 @@ for x in items:
         ibase_adj=adjusted_iess_base_for_days(ibase, idays, expected) if imatch else None
         rr_days=num(rr.get('Días')); rr_base=num(rr.get('Remuneración computable'))
         total_rr += rr_days; total_app += expected; total_iess += idays or 0
-        if rr_days != expected: day_observations.append(f'{m:02d}/{y}: días RR.HH. {rr_days:g} vs días correctos {expected:g} según ingreso BDD + salida RR.HH.')
-        # Días IESS son informativos. Para beneficios/base se usa el valor IESS ajustado a los días correctos.
+        # Las fechas definen un TOPE, no obligan a completar los días hasta ese tope.
+        # Si RR.HH. tiene menos días (faltas, ausencias, ingreso parcial real, etc.), se acepta.
+        # Solo se observa si RR.HH. pretende más días que los posibles por ingreso BDD + salida RR.HH.
+        if rr_days > expected:
+            day_observations.append(f'{m:02d}/{y}: RR.HH. reporta {rr_days:g} días, pero el máximo por ingreso BDD + salida RR.HH. es {expected:g}.')
+        elif rr_days < expected:
+            info_observations.append(f'{m:02d}/{y}: RR.HH. reporta {rr_days:g} días de trabajo dentro de un máximo de {expected:g}; se conserva sin corregir.')
+        # Días IESS son informativos. La base IESS nunca se infla cuando IESS reporta menos días.
+        # Solo se recorta si IESS excede el máximo permitido por las fechas laborales.
         if ibase_adj is not None and abs(rr_base-ibase_adj)>MONETARY_TOLERANCE:
-            info_observations.append(f'{m:02d}/{y}: base RR.HH. ${rr_base:.2f} vs IESS ajustada ${ibase_adj:.2f} (IESS reporta ${ibase:.2f} / {idays:g} días; correcto {expected:g} días; dif. ${abs(rr_base-ibase_adj):.2f})')
-        row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días correctos':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS ajustada a días correctos':ibase_adj,'Dif. RRHH-IESS ajustada':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
+            action = 'base IESS conservada' if (idays is not None and idays <= expected) else 'base IESS recortada al máximo por fechas'
+            info_observations.append(f'{m:02d}/{y}: base RR.HH. ${rr_base:.2f} vs base IESS utilizable ${ibase_adj:.2f} ({action}; IESS ${ibase:.2f} / {idays:g} días; máximo por fechas {expected:g}; dif. ${abs(rr_base-ibase_adj):.2f})')
+        row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días máximos por fechas':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS utilizable':ibase_adj,'Dif. RRHH-IESS utilizable':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
         dayrows.append(row); month_rows.append(row)
 
     # Control de períodos:
@@ -174,7 +184,7 @@ for x in items:
     summary_rows.append({
         'Trabajador':x['name'],'Cédula':ident,'Estado':status,'Revisión valores':money_status,'Revisión días':days_status,'Revisión períodos':periods_status,'Estado BDD':prec.get('status','') if prec else 'NO ENCONTRADO',
         'Ingreso RRHH':fmtdate(x.get('start')),'Ingreso BDD':fmtdate(real_start),'Salida RRHH':fmtdate(x.get('end')),'Salida BDD':fmtdate(prec.get('end')) if prec and prec.get('end') else '',
-        'Días RRHH':total_rr,'Días correctos':total_app,'Días IESS (informativo)':total_iess if irows else None,
+        'Días RRHH':total_rr,'Días máximos por fechas':total_app,'Días IESS (informativo)':total_iess if irows else None,
         'D13 control':'ℹ️ MENSUALIZADO — diferencia informativa','D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
         'Período Vac':(f"{fmtdate(legal.get('vac_period_start'))} - {fmtdate(legal.get('vac_period_end'))} ({legal.get('vac_type','')})" if legal else ''),'Vac RRHH':money(x.get('reported_vac')),'Vac APP/IESS':money(vac) if legal else None,'Dif Vac':round(money(x.get('reported_vac'))-money(vac),2) if legal else None,
         'Nº obs. valores':len(observations),'Nº obs. días':len(day_observations),'Nº obs. períodos':len(period_observations),
