@@ -206,4 +206,4 @@ if f_liq:
         st.download_button('⬇️ Descargar auditoría integral Excel',bio.getvalue(),'Auditoria_Integral_Liquidaciones_CENASE.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 
 st.divider()
-st.caption('Versión 5.0 | CENASE | 3 controles: RR.HH. vs APP · APP vs IESS · Base de Personal | Febrero completo = 30 días')
+st.caption('Versión 5.1 | CENASE | 3 controles: RR.HH. vs APP · APP vs IESS · Base de Personal | Febrero completo = 30 días')
