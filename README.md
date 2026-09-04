@@ -1,21 +1,19 @@
-# Verificador Liquidaciones CENASE v7
+# Verificador de Liquidaciones CENASE v8 – REPORTE MASIVO
 
-Archivos en la raíz de GitHub: `main.py`, `engine.py`, `requirements.txt`.
+Carga simultáneamente:
+1. Liquidaciones RR.HH. (archivo masivo)
+2. BDD de personal.xlsx
+3. IESS BASE.xlsx
 
-Carga 3 archivos:
-1. Liquidaciones masivas RR.HH.
-2. BDD de personal.xlsx (ACTIVOS/REINGRESOS/INACTIVOS)
-3. IESS BASE.xlsx (hoja IESS, encabezados en fila 2)
+La aplicación procesa todas las liquidaciones de una vez. Ya no obliga a escoger trabajador por trabajador.
 
-Cambios v7:
-- IESS se reconoce sin mapeo manual.
-- Cruce por cédula + período, nombre como respaldo.
-- Fecha real de ingreso/ciclo desde BDD Personal.
-- Mes completo = 30 días, incluido febrero.
-- Vacaciones por aniversario de ingreso; muestra años completos y proporcional vigente.
-- Décimo tercero por período legal 1-dic/30-nov usando las bases IESS del período.
-- Décimo cuarto por período regional y SBU.
-- Fondos de reserva desde el primer aniversario como control general.
-- Aportes IESS: 9,45% personal y 11,15% patronal para relación privada ordinaria.
+Salidas:
+- Resumen masivo con estado APTO / REVISAR.
+- Observaciones automáticas.
+- Comparativo mes a mes RR.HH. / APP / IESS.
+- Beneficios calculados.
+- Aportes IESS.
+- Excel masivo con hojas de resumen, observaciones, mes a mes, beneficios, aportes y fichas individuales.
+- PDF masivo.
 
-Nota: los ciclos completos de vacaciones deben contrastarse con registro de vacaciones gozadas/pagadas para determinar saldo pendiente real. La app no inventa ese dato.
+Criterio de días: mes completo = 30 días, incluido febrero. Mes incompleto = base 30.
