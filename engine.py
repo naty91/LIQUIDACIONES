@@ -914,7 +914,30 @@ def latest_iess_salary(irows, on_or_before=None):
     return usable[-1][1] if usable else 0.0
 
 
+def adjusted_iess_base_for_days(base, iess_days, correct_days):
+    """Ajusta la base IESS a los días correctos del vínculo laboral.
+
+    Se conserva el valor diario implícito del IESS y se sustituye únicamente la cantidad
+    de días por la que corresponde según fecha real de ingreso y fecha de salida de la
+    liquidación. Ej.: IESS $482 / 30 días x 27 días correctos = $433,80.
+    """
+    base = num(base)
+    iess_days = num(iess_days)
+    correct_days = max(0.0, min(30.0, num(correct_days)))
+    if base == 0 or correct_days == 0:
+        return 0.0
+    divisor = iess_days if iess_days > 0 else 30.0
+    return round((base / divisor) * correct_days, 2)
+
+
 def sum_iess_base(irows, start, end):
+    """Suma bases IESS ajustadas a los días correctos del período.
+
+    La fecha de salida que llega en ``end`` manda para el último mes. Esto permite usar
+    la base legal reportada por IESS, pero corrigiendo sus días cuando el aviso de salida
+    aún refleja un mes completo. También prorratea correctamente meses de inicio/cierre
+    de ciclos de vacaciones, décimos y fondos de reserva.
+    """
     total=0.0
     detail=[]
     for r in irows or []:
@@ -922,8 +945,17 @@ def sum_iess_base(irows, start, end):
         if _period_in_range(p, start, end):
             base=num(r.get('Sueldo'))
             days=num(r.get('Días'))
-            total += base
-            detail.append({'Periodo':r.get('Periodo'),'Año':p[0] if p else None,'Mes':p[1] if p else None,'Días IESS':days,'Base IESS':round(base,2)})
+            y = p[0] if p else None
+            m = p[1] if p else None
+            correct_days = _payroll_days_for_month(start, end, y, m) if y and m else days
+            adj_base = adjusted_iess_base_for_days(base, days, correct_days)
+            total += adj_base
+            detail.append({
+                'Periodo':r.get('Periodo'),'Año':y,'Mes':m,
+                'Días IESS':days,'Días correctos':correct_days,
+                'Base IESS reportada':round(base,2),'Base IESS ajustada':adj_base,
+                'Ajuste':round(adj_base-base,2)
+            })
     detail.sort(key=lambda z: (z.get('Año') or 0,z.get('Mes') or 0))
     return round(total,2), detail
 
