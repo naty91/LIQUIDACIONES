@@ -1,24 +1,16 @@
-# Verificador de Liquidaciones CENASE v8.3 – Control legal de períodos
+# Verificador de Liquidaciones CENASE v8.4
 
 Cambios principales:
-- Fecha de ingreso: se toma del ciclo correcto de la BDD de Personal.
-- Fecha de salida: manda la fecha indicada en la liquidación de RR.HH.
-- Días IESS: informativos; no generan observación por sí solos.
-- Base IESS: se ajusta a los días correctos según ingreso BDD + salida RR.HH.
-- Tolerancia monetaria: diferencias hasta USD 1,50 pasan como OK.
-- Décimo tercero: valida el período legal 1 de diciembre a 30 de noviembre, recortado por ingreso/salida. La APP indica PERÍODO COMPLETO o PROPORCIONAL.
-- Décimo cuarto: valida el período regional (Costa/Insular: 1-mar a último día de febrero; Sierra/Amazonía: 1-ago a 31-jul), recortado por ingreso/salida.
-- Vacaciones: usa ciclos individuales por aniversario de la fecha real de ingreso. La APP indica AÑO COMPLETO o PROPORCIONAL AL CESE.
-- La lista de meses usada por RR.HH. se compara por separado contra los meses que legalmente corresponden a D13 y al ciclo vacacional vigente.
-- Ciclos completos de vacaciones anteriores se muestran como informativos para validar si ya fueron gozados/pagados; no se suman automáticamente para evitar duplicidad.
+- Décimo tercero de guardias tratado como **MENSUALIZADO**: se muestra diferencia RR.HH. vs APP/IESS, pero **no genera estado REVISAR**, ni por período ni por diferencia monetaria.
+- Vacaciones: único beneficio del bloque que genera control de período en esta fase. Se determina **AÑO COMPLETO** o **PROPORCIONAL AL CESE** según fecha de ingreso real de BDD y fecha de salida de RR.HH.
+- Se mantiene tolerancia monetaria de USD 1,50 para vacaciones y demás controles monetarios que sí aplican.
+- Se mantiene fecha de salida RR.HH. como fecha efectiva para ajustar la base IESS del último mes.
+- Días IESS continúan solo como informativos.
 
-## Archivos para Streamlit
-Subir a la raíz del repositorio:
-- `main.py`
-- `engine.py`
-- `requirements.txt`
+Subir `main.py`, `engine.py` y `requirements.txt` juntos a la raíz del repositorio de Streamlit.
 
-## Archivos de entrada
-1. Liquidaciones RR.HH. masivas.
-2. `BDD de personal.xlsx`.
-3. `IESS BASE.xlsx`.
+
+## v8.5 — Regla de tolerancia
+- Diferencia absoluta **hasta e incluyendo USD 1,50** en décimo tercero y vacaciones = **✅ CORRECTO**.
+- Vacaciones: solo diferencia monetaria **> USD 1,50** o período vacacional incorrecto = **⚠️ REVISAR**.
+- Décimo tercero mensualizado: si supera USD 1,50 se informa la diferencia, pero no cambia el dictamen a REVISAR.

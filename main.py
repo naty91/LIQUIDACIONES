@@ -14,7 +14,7 @@ from engine import (_month_num, _payroll_days_for_month, _period_in_range,
 st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.3.1', page_icon='✅', layout='wide')
 st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.3.1')
 st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · control legal de PERÍODOS · tolerancia ±$1,50')
-st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia. Además, la APP valida por separado el período correcto de décimo tercero y el ciclo de vacaciones según la fecha real de ingreso.')
+st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia. Para guardias, el décimo tercero se trata como mensualizado: se muestra únicamente la diferencia informativa y NO genera estado REVISAR. Las vacaciones sí se auditan por fecha real de ingreso BDD y fecha de salida RR.HH., determinando si corresponde vacación completa o proporcional.')
 
 def fmtdate(v):
     return v.strftime('%d/%m/%Y') if isinstance(v,(date,datetime)) else str(v or '')
@@ -120,25 +120,21 @@ for x in items:
         row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días correctos':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS ajustada a días correctos':ibase_adj,'Dif. RRHH-IESS ajustada':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
         dayrows.append(row); month_rows.append(row)
 
-    # Control de períodos: la fecha de ingreso BDD define desde cuándo nace cada derecho; la salida RR.HH. cierra el cálculo.
+    # Control de períodos:
+    # - D13 de guardias: mensualizado. Solo se informa la diferencia; NUNCA genera REVISAR por período ni por valor.
+    # - Vacaciones: sí se auditan por aniversario, usando ingreso real BDD + salida RR.HH.
     rr_periods=rrhh_periods_from_item(x)
     if legal:
-        d13_check=period_set_check(rr_periods, legal.get('d13_months',[]))
         vac_check=period_set_check(rr_periods, legal.get('vac_months',[]))
-        if not d13_check['ok']:
-            parts=[]
-            if d13_check['missing']: parts.append('faltan '+fmt_period_months(d13_check['missing']))
-            if d13_check['extra']: parts.append('sobran '+fmt_period_months(d13_check['extra']))
-            period_observations.append(('Décimo tercero', f"Período RR.HH. no coincide con el legal ({'; '.join(parts)}). Debe usarse {fmtdate(legal.get('d13_period_start'))} a {fmtdate(legal.get('d13_period_end'))} — {legal.get('d13_type','')}."))
         if not vac_check['ok']:
             parts=[]
             if vac_check['missing']: parts.append('faltan '+fmt_period_months(vac_check['missing']))
             if vac_check['extra']: parts.append('sobran '+fmt_period_months(vac_check['extra']))
-            period_observations.append(('Vacaciones', f"Período RR.HH. no coincide con el ciclo por aniversario ({'; '.join(parts)}). Debe usarse {fmtdate(legal.get('vac_period_start'))} a {fmtdate(legal.get('vac_period_end'))} — {legal.get('vac_type','')}."))
+            period_observations.append(('Vacaciones', f"Período RR.HH. no coincide con el ciclo vacacional por aniversario ({'; '.join(parts)}). Según ingreso BDD {fmtdate(real_start)} y salida RR.HH. {fmtdate(x.get('end'))}, corresponde {fmtdate(legal.get('vac_period_start'))} a {fmtdate(legal.get('vac_period_end'))} — {legal.get('vac_type','')}."))
         period_rows += [
-            {'Trabajador':x['name'],'Rubro':'Décimo tercero','Tipo':legal.get('d13_type',''),'Inicio legal':fmtdate(legal.get('d13_period_start')),'Fin legal':fmtdate(legal.get('d13_period_end')),'Meses esperados':fmt_period_months(legal.get('d13_months',[])),'Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'✅ OK' if d13_check['ok'] else '⚠️ REVISAR'},
+            {'Trabajador':x['name'],'Rubro':'Décimo tercero','Tipo':'MENSUALIZADO','Inicio legal':fmtdate(legal.get('d13_period_start')),'Fin legal':fmtdate(legal.get('d13_period_end')),'Meses esperados':'Informativo','Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'ℹ️ INFORMATIVO — NO GENERA REVISIÓN'},
             {'Trabajador':x['name'],'Rubro':'Décimo cuarto','Tipo':legal.get('d14_type',''),'Inicio legal':fmtdate(legal.get('d14_period_start')),'Fin legal':fmtdate(legal.get('d14_period_end')),'Meses esperados':fmt_period_months(legal.get('d14_months',[])),'Meses en RR.HH.':'No consta en este formato','Estado período':'ℹ️ INFORMATIVO'},
-            {'Trabajador':x['name'],'Rubro':'Vacaciones ciclo vigente','Tipo':legal.get('vac_type',''),'Inicio legal':fmtdate(legal.get('vac_period_start')),'Fin legal':fmtdate(legal.get('vac_period_end')),'Meses esperados':fmt_period_months(legal.get('vac_months',[])),'Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'✅ OK' if vac_check['ok'] else '⚠️ REVISAR'},
+            {'Trabajador':x['name'],'Rubro':'Vacaciones ciclo vigente','Tipo':legal.get('vac_type',''),'Inicio legal':fmtdate(legal.get('vac_period_start')),'Fin legal':fmtdate(legal.get('vac_period_end')),'Meses esperados':fmt_period_months(legal.get('vac_months',[])),'Meses en RR.HH.':fmt_period_months(rr_periods),'Estado período':'✅ OK' if vac_check['ok'] else '⚠️ REVISAR VACACIONES'},
         ]
         # Ciclos completos de vacaciones ya generados se muestran aparte; no se cobran dos veces sin validar si fueron gozados/pagados.
         for vc in legal.get('vacation_cycles',[]):
@@ -148,11 +144,11 @@ for x in items:
     d13=legal.get('d13_calc',0) if legal else 0
     vac=legal.get('vac_current_calc',0) if legal else 0
     if legal:
-        if abs(money(x.get('reported13'))-money(d13))>MONETARY_TOLERANCE: observations.append(f"Décimo tercero: RR.HH. ${money(x.get('reported13')):.2f} vs APP/IESS ${money(d13):.2f}")
-        if abs(money(x.get('reported_vac'))-money(vac))>MONETARY_TOLERANCE: observations.append(f"Vacaciones: RR.HH. ${money(x.get('reported_vac')):.2f} vs APP/IESS ${money(vac):.2f}")
+        # D13 mensualizado: se conserva la diferencia en el reporte, pero NO genera observación ni estado REVISAR.
+        if abs(money(x.get('reported_vac'))-money(vac))>MONETARY_TOLERANCE: observations.append(f"Vacaciones: RR.HH. ${money(x.get('reported_vac')):.2f} vs APP/IESS ${money(vac):.2f} — {legal.get('vac_type','')}")
         benefit_rows += [
-            {'Trabajador':x['name'],'Rubro':f"Décimo tercero ({legal.get('d13_type','')})",'RR.HH.':money(x.get('reported13')),'APP/IESS':money(d13),'Diferencia':round(money(x.get('reported13'))-money(d13),2)},
-            {'Trabajador':x['name'],'Rubro':f"Vacaciones ({legal.get('vac_type','')})",'RR.HH.':money(x.get('reported_vac')),'APP/IESS':money(vac),'Diferencia':round(money(x.get('reported_vac'))-money(vac),2)},
+            {'Trabajador':x['name'],'Rubro':'Décimo tercero mensualizado (informativo)','RR.HH.':money(x.get('reported13')),'APP/IESS':money(d13),'Diferencia':round(money(x.get('reported13'))-money(d13),2),'Estado':('✅ CORRECTO' if abs(money(x.get('reported13'))-money(d13))<=MONETARY_TOLERANCE else 'ℹ️ DIFERENCIA > $1,50 — INFORMATIVA, NO GENERA REVISIÓN')},
+            {'Trabajador':x['name'],'Rubro':f"Vacaciones ({legal.get('vac_type','')})",'RR.HH.':money(x.get('reported_vac')),'APP/IESS':money(vac),'Diferencia':round(money(x.get('reported_vac'))-money(vac),2),'Estado':'✅ OK' if abs(money(x.get('reported_vac'))-money(vac))<=MONETARY_TOLERANCE else '⚠️ REVISAR VACACIONES'},
             {'Trabajador':x['name'],'Rubro':'Décimo cuarto','RR.HH.':None,'APP/IESS':money(legal.get('d14_calc',0)),'Diferencia':None},
             {'Trabajador':x['name'],'Rubro':'Fondos de reserva','RR.HH.':None,'APP/IESS':money(legal.get('fund_reserve_calc',0)),'Diferencia':None},
         ]
@@ -178,7 +174,7 @@ for x in items:
         'Trabajador':x['name'],'Cédula':ident,'Estado':status,'Revisión valores':money_status,'Revisión días':days_status,'Revisión períodos':periods_status,'Estado BDD':prec.get('status','') if prec else 'NO ENCONTRADO',
         'Ingreso RRHH':fmtdate(x.get('start')),'Ingreso BDD':fmtdate(real_start),'Salida RRHH':fmtdate(x.get('end')),'Salida BDD':fmtdate(prec.get('end')) if prec and prec.get('end') else '',
         'Días RRHH':total_rr,'Días correctos':total_app,'Días IESS (informativo)':total_iess if irows else None,
-        'Período D13':(f"{fmtdate(legal.get('d13_period_start'))} - {fmtdate(legal.get('d13_period_end'))} ({legal.get('d13_type','')})" if legal else ''),'D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
+        'D13 control':'ℹ️ MENSUALIZADO — diferencia informativa','D13 RRHH':money(x.get('reported13')),'D13 APP/IESS':money(d13) if legal else None,'Dif D13':round(money(x.get('reported13'))-money(d13),2) if legal else None,
         'Período Vac':(f"{fmtdate(legal.get('vac_period_start'))} - {fmtdate(legal.get('vac_period_end'))} ({legal.get('vac_type','')})" if legal else ''),'Vac RRHH':money(x.get('reported_vac')),'Vac APP/IESS':money(vac) if legal else None,'Dif Vac':round(money(x.get('reported_vac'))-money(vac),2) if legal else None,
         'Nº obs. valores':len(observations),'Nº obs. días':len(day_observations),'Nº obs. períodos':len(period_observations),
         'Observaciones valores':' | '.join(observations),'Observaciones días':' | '.join(day_observations),'Observaciones períodos':' | '.join([f'{r}: {o}' for r,o in period_observations])
@@ -206,8 +202,8 @@ st.caption('La fecha de ingreso se toma de la BDD de Personal. La fecha de salid
 if dodf.empty: st.success('No se detectaron diferencias entre los días de RR.HH. y los días correctos calculados con ingreso BDD + salida RR.HH.')
 else: st.dataframe(dodf,use_container_width=True,hide_index=True,height=min(500,80+32*len(dodf)))
 
-st.markdown('### 4. Revisión de períodos legales — décimos y vacaciones')
-st.caption('Décimo tercero se controla por su período legal 1-dic/30-nov, recortado por fecha de ingreso y salida. Vacaciones se controlan por aniversario de ingreso. La APP marca si corresponde período completo o proporcional.')
+st.markdown('### 4. Control de beneficios — D13 informativo y vacaciones auditables')
+st.caption('Guardias: el décimo tercero está mensualizado. Si la diferencia absoluta es hasta USD 1,50 se muestra ✅ CORRECTO; si supera USD 1,50 se muestra solo como diferencia informativa y no genera REVISAR. En vacaciones, diferencias de hasta USD 1,50 también se muestran ✅ CORRECTO; solo una diferencia mayor a USD 1,50 o un período vacacional incorrecto genera revisión.')
 if podf.empty: st.success('Los períodos de RR.HH. coinciden con los períodos legales aplicables.')
 else: st.dataframe(podf,use_container_width=True,hide_index=True,height=min(500,80+32*len(podf)))
 st.markdown('#### Matriz de períodos por trabajador')
@@ -244,4 +240,4 @@ d1,d2=st.columns(2)
 with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.pdf','application/pdf',use_container_width=True)
 
-st.caption('v8.3.1 · control legal de períodos · tolerancia ±$1,50 · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')
+st.caption('v8.5 · tolerancia inclusiva ≤ $1,50 = CORRECTO en décimos y vacaciones · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')
