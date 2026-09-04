@@ -401,3 +401,87 @@ def backup_payload(data: dict) -> bytes:
 
 def restore_payload(raw: bytes) -> dict:
     return json.loads(raw.decode("utf-8"))
+
+
+def _looks_name(v):
+    if not isinstance(v, str):
+        return False
+    s=v.strip()
+    if not s or s.lower() in {'mes','a recibir:','a recibir'}:
+        return False
+    return any(ch.isalpha() for ch in s) and len(s) >= 5
+
+
+def _is_date(v):
+    return isinstance(v, (datetime, date))
+
+
+def extract_cenase_batch(file_obj):
+    """Extract all consecutive CENASE liquidation blocks from a workbook.
+
+    Expected block: Name / entry date / exit date / header / monthly rows / total / a recibir /
+    x cobrar / Vacaciones / Desahucio x N años / TOTAL A RECIBIR.
+    Works even when all employees are in a single sheet (e.g. Hoja1).
+    """
+    wb = load_workbook(file_obj, data_only=True, read_only=True, keep_vba=False)
+    out=[]
+    for ws in wb.worksheets:
+        maxr=ws.max_row
+        r=1
+        while r <= maxr-3:
+            a=ws.cell(r,1).value
+            if _looks_name(a) and _is_date(ws.cell(r+1,1).value) and _is_date(ws.cell(r+2,1).value) and str(ws.cell(r+3,1).value or '').strip().lower()=='mes':
+                start_row=r
+                name=str(a).strip()
+                start=as_date(ws.cell(r+1,1).value); end=as_date(ws.cell(r+2,1).value)
+                rows=[]; j=r+4; total_base=0; total_days=0; total_vacbase=0; receive=None
+                while j<=maxr:
+                    c0,c1,c2,c3=[ws.cell(j,c).value for c in range(1,5)]
+                    la=str(c0 or '').strip().lower()
+                    if 'a recibir' in la:
+                        receive=j; break
+                    if c0 not in (None,'') and (num(c1)!=0 or num(c2)!=0 or num(c3)!=0):
+                        rows.append({'Mes': c0.strftime('%b-%y') if _is_date(c0) else str(c0),
+                                     'Remuneración computable': num(c1), 'Días': num(c2)})
+                    elif c0 in (None,'') and (num(c1)!=0 or num(c2)!=0 or num(c3)!=0):
+                        total_base=num(c1); total_days=num(c2); total_vacbase=num(c3)
+                    j+=1
+                rep13=repvac=repdes=reptotal=0.0; des_years=0
+                if receive:
+                    rep13=num(ws.cell(receive,2).value); repvac=num(ws.cell(receive,4).value)
+                    for k in range(receive+1, min(maxr,receive+10)+1):
+                        txt=str(ws.cell(k,2).value or '').strip()
+                        low=txt.lower(); val=num(ws.cell(k,4).value)
+                        if low.startswith('desahucio') or low.startswith('desahusio'):
+                            repdes=val
+                            import re
+                            m=re.search(r'(\d+)\s*a', low)
+                            if m: des_years=int(m.group(1))
+                        if 'total a recibir' in low:
+                            reptotal=val; break
+                last_salary=rows[-1]['Remuneración computable'] if rows else 0.0
+                calc13=round(sum(x['Remuneración computable'] for x in rows)/12,2)
+                calcvac=round(sum(x['Remuneración computable'] for x in rows)/24,2)
+                calcdes=round(last_salary*0.25*des_years,2) if des_years else 0.0
+                calctotal=round(calcvac+calcdes,2)
+                checks=[]
+                def ok(rep,calc): return abs(float(rep)-float(calc))<=TOL_DEFAULT
+                checks.append(('Décimo tercero',rep13,calc13,ok(rep13,calc13)))
+                checks.append(('Vacaciones',repvac,calcvac,ok(repvac,calcvac)))
+                if des_years or repdes:
+                    checks.append(('Desahucio',repdes,calcdes,ok(repdes,calcdes)))
+                checks.append(('Total a recibir',reptotal,calctotal,ok(reptotal,calctotal)))
+                failures=sum(1 for _,_,_,flag in checks if not flag)
+                out.append({
+                    'sheet':ws.title,'row':start_row,'name':name,'start':start,'end':end,'rows':rows,
+                    'base': round(sum(x['Remuneración computable'] for x in rows),2),
+                    'days': round(sum(x['Días'] for x in rows),2), 'last_salary':last_salary,
+                    'reported13':rep13,'calc13':calc13,'reported_vac':repvac,'calc_vac':calcvac,
+                    'des_years':des_years,'reported_des':repdes,'calc_des':calcdes,
+                    'reported_total':reptotal,'calc_total':calctotal,'checks':checks,
+                    'failures':failures,'status':'✅ CORRECTO' if failures==0 else f'⚠️ REVISAR ({failures})'
+                })
+                r=max(j+1,r+4)
+            else:
+                r+=1
+    return out

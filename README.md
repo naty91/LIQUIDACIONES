@@ -1,33 +1,23 @@
-# Verificador de Liquidaciones CENASE v2
+# Verificador Masivo de Liquidaciones CENASE v3
 
-Aplicación Streamlit para auditar liquidaciones laborales de CENASE contra un cálculo independiente basado en la normativa ecuatoriana y la guía oficial del Ministerio del Trabajo.
+## Uso
+1. Suba a Streamlit un archivo XLSX/XLSM con varias liquidaciones en una sola hoja, consecutivas.
+2. Cada bloque debe contener: nombre, fecha ingreso, fecha salida, encabezado `mes / tercer decimo / dias / vacac`, detalle mensual, `a recibir`, `Vacaciones`, `Desahucio x N años`, `TOTAL A RECIBIR`.
+3. La app detecta cada trabajador automáticamente y revisa uno por uno.
+4. Descarga consolidado Excel y PDF con detalle individual.
 
-## Qué hace
-- Lee directamente el archivo CENASE XLSX/XLSM cuando contiene la hoja `VERIFICADOR`.
-- Detecta nombre, fechas, base mensual y valores de décimo tercero/vacaciones/desahucio cuando el formato lo permite.
-- Recalcula décimo tercero, décimo cuarto, vacaciones, bonificación por desahucio e indemnización por despido intempestivo.
-- Permite controlar remuneración pendiente, fondos de reserva y otros valores.
-- Compara APP vs RR.HH. y marca: CORRECTO, DIFERENCIA, RUBRO OMITIDO o REVISAR APLICACIÓN.
-- Emite dictamen `APTO PARA PAGO` o `REQUIERE CORRECCIÓN / REVISIÓN`.
-- Descarga verificación en Excel y PDF.
-- Descarga/carga respaldo JSON de la revisión.
-
-## Referencia principal
-https://calculadoras.trabajo.gob.ec/liquidaciones
-
-## Subir a Streamlit Community Cloud
-1. Cree un repositorio en GitHub.
-2. Suba `main.py`, `engine.py` y `requirements.txt` en la raíz.
-3. En Streamlit Community Cloud seleccione el repositorio y `main.py`.
-
-## Ejecutar localmente
+## Ejecutar
 ```bash
 pip install -r requirements.txt
 streamlit run main.py
 ```
 
-## Criterios importantes
-- El archivo de RR.HH. es un dato a verificar, no la fuente de verdad del cálculo.
-- La causal documentada de terminación determina desahucio/indemnización.
-- Vacaciones acumuladas, gozadas o previamente pagadas deben estar soportadas; el campo de ajuste permite reflejar esos casos sin alterar la base original.
-- El verificador no sustituye el acta de finiquito del SUT.
+## Control automático con este archivo
+- suma de remuneración computable
+- suma de días
+- décimo tercero = base / 12
+- vacaciones = base / 24
+- desahucio indicado = última remuneración x 25% x años escritos en el archivo
+- total a recibir del bloque = vacaciones + desahucio indicado
+
+Los rubros que no están presentes en la carga (causal legal, décimo cuarto, despido, fondos de reserva, sueldos pendientes, descuentos, etc.) requieren datos/soportes adicionales y no se aprueban por inferencia.
