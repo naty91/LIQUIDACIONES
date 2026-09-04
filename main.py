@@ -8,10 +8,11 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from engine import *
-from engine import _month_num, _payroll_days_for_month, _period_in_range
+from engine import (_month_num, _payroll_days_for_month, _period_in_range,
+                    rrhh_periods_from_item, period_set_check, fmt_period_months, month_sequence)
 
-st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.3', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.3')
+st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.3.1', page_icon='✅', layout='wide')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.3.1')
 st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · control legal de PERÍODOS · tolerancia ±$1,50')
 st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se ajusta a los días correctos del período; los días IESS quedan solo como referencia. Además, la APP valida por separado el período correcto de décimo tercero y el ciclo de vacaciones según la fecha real de ingreso.')
 
@@ -243,4 +244,4 @@ d1,d2=st.columns(2)
 with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.pdf','application/pdf',use_container_width=True)
 
-st.caption('v8.3 · control legal de períodos · tolerancia ±$1,50 · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')
+st.caption('v8.3.1 · control legal de períodos · tolerancia ±$1,50 · ingreso BDD + salida RR.HH. · IESS como base monetaria ajustada · días IESS informativos')
