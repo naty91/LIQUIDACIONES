@@ -4,9 +4,10 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 from engine import *
+from engine import _month_num, _payroll_days_for_month, _period_in_range
 
-st.set_page_config(page_title='Verificador Liquidaciones CENASE v7', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE v7')
+st.set_page_config(page_title='Verificador Liquidaciones CENASE v7.1', page_icon='✅', layout='wide')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v7.1')
 st.caption('RR.HH. vs APP · IESS como base real reportada · BDD Personal para ciclos laborales · períodos legales por beneficio')
 st.info('Días de nómina: mes completo = 30 días, incluido febrero. Mes incompleto: sueldo mensual ÷ 30 × días. La fecha de ingreso se toma de la BDD Personal cuando existe coincidencia; el IESS se usa como base real reportada de remuneraciones y aportes.')
 
@@ -113,7 +114,7 @@ if f_liq:
                 pd.DataFrame(x['dayrows']).to_excel(wr,index=False,sheet_name=sn)
                 if x['legal']:
                     pd.DataFrame([{k:v for k,v in c.items() if k!='Detalle'} for c in x['legal']['vacation_cycles']]).to_excel(wr,index=False,sheet_name=sn,startrow=len(x['dayrows'])+3)
-        st.download_button('⬇️ Descargar auditoría v7 en Excel',bio.getvalue(),'Auditoria_Liquidaciones_CENASE_v7.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
+        st.download_button('⬇️ Descargar auditoría v7 en Excel',bio.getvalue(),'Auditoria_Liquidaciones_CENASE_v7_1.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 
 st.divider()
-st.caption('v7 · IESS automático · BDD Personal automática · vacaciones por aniversario · D13/D14 por período legal · control 30 días')
+st.caption('v7.1 · IESS automático · BDD Personal automática · vacaciones por aniversario · D13/D14 por período legal · control 30 días')
