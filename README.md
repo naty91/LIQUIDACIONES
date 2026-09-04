@@ -1,23 +1,25 @@
-# Verificador Masivo de Liquidaciones CENASE v3
+# Verificador Integral de Liquidaciones CENASE v5
 
-## Uso
-1. Suba a Streamlit un archivo XLSX/XLSM con varias liquidaciones en una sola hoja, consecutivas.
-2. Cada bloque debe contener: nombre, fecha ingreso, fecha salida, encabezado `mes / tercer decimo / dias / vacac`, detalle mensual, `a recibir`, `Vacaciones`, `Desahucio x N años`, `TOTAL A RECIBIR`.
-3. La app detecta cada trabajador automáticamente y revisa uno por uno.
-4. Descarga consolidado Excel y PDF con detalle individual.
+## Flujo
+1. Subir **Liquidaciones RR.HH.** (archivo masivo actual de CENASE).
+2. Subir **Base de Personal** y mapear cédula/nombre, fecha real de ingreso y salario básico mensual.
+3. Subir **reporte IESS** y mapear cédula/nombre, período, días, materia gravada, aporte personal y aporte patronal.
+4. La APP realiza tres controles:
+   - RR.HH. vs APP (fechas, días, décimo tercero, vacaciones, desahucio y total del formato cargado).
+   - APP vs IESS (días, materia gravada y aportes 9,45% / 11,15%).
+   - RR.HH./IESS vs Base de Personal (fecha real de ingreso y salario básico).
 
-## Ejecutar
+## Regla de días
+- Mes completo = 30 días.
+- Febrero completo = 30 días aunque el calendario tenga 28/29.
+- Mes incompleto: sueldo fijo proporcional = salario básico mensual / 30 × días aplicables.
+
+## IESS
+Para trabajador privado bajo relación de dependencia: 9,45% aporte personal + 11,15% patronal = 20,60%.
+La materia gravada puede incluir rubros adicionales al salario fijo; por eso se muestra separada del sueldo proporcional básico.
+
+## Streamlit
 ```bash
 pip install -r requirements.txt
 streamlit run main.py
 ```
-
-## Control automático con este archivo
-- suma de remuneración computable
-- suma de días
-- décimo tercero = base / 12
-- vacaciones = base / 24
-- desahucio indicado = última remuneración x 25% x años escritos en el archivo
-- total a recibir del bloque = vacaciones + desahucio indicado
-
-Los rubros que no están presentes en la carga (causal legal, décimo cuarto, despido, fondos de reserva, sueldos pendientes, descuentos, etc.) requieren datos/soportes adicionales y no se aprueban por inferencia.
