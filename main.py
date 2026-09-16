@@ -12,7 +12,7 @@ from engine import (_month_num, _payroll_days_for_month, _period_in_range,
                     rrhh_periods_from_item, period_set_check, fmt_period_months, month_sequence)
 
 st.set_page_config(page_title='Verificador Liquidaciones CENASE v8.7', page_icon='✅', layout='wide')
-st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.7')
+st.title('✅ Verificador Integral de Liquidaciones – CENASE v8.8')
 st.caption('REPORTE MASIVO: RR.HH. vs APP vs IESS vs BDD Personal · control legal de PERÍODOS · tolerancia ±$1,50')
 st.info('Cargue los 3 archivos y la APP procesa todas las liquidaciones de una sola vez. La fecha de ingreso se valida con la BDD y la fecha de salida usada para el cálculo es la que consta en la liquidación RR.HH. La base IESS se conserva cuando reporta menos días por trabajo efectivo y solo se recorta si excede el máximo permitido por la fecha de ingreso/salida; los días IESS quedan como referencia. Para guardias, el décimo tercero se trata como mensualizado: se muestra únicamente la diferencia informativa y NO genera estado REVISAR. Las vacaciones sí se auditan por fecha real de ingreso BDD y fecha de salida RR.HH., determinando si corresponde vacación completa o proporcional.')
 
@@ -91,8 +91,38 @@ for x in items:
     real_start=prec.get('start') if prec and prec.get('start') else x.get('start')
     ident=(prec.get('ident') if prec else '') or x.get('ident','')
     irows=iess_rows_for_employee(iess_df,ident,x['name'])
-    legal=legal_benefits_from_iess(real_start,x.get('end'),irows,region,sbu) if irows else {}
+
+    # V8.8: si el trabajador sale en el mes calendario actual y el IESS todavía
+    # no tiene ese período (mes aún no cerrado), crear una base PROVISIONAL.
+    # Regla CENASE: sueldo básico mensual / 30 x días efectivamente trabajados
+    # en ese mes, delimitados por fecha de ingreso BDD y fecha de salida RR.HH.
+    calc_irows=list(irows)
+    provisional_period=None
+    real_end=x.get('end')
+    today=date.today()
+    if real_end and real_start and (real_end.year, real_end.month)==(today.year, today.month):
+        provisional_period=(real_end.year, real_end.month)
+        has_current=any((z.get('_period') or parse_month_period(z.get('Periodo'))) == provisional_period for z in irows)
+        if not has_current:
+            worked_days=_payroll_days_for_month(real_start, real_end, real_end.year, real_end.month)
+            basic_salary=num(prec.get('salary')) if prec else 0
+            if basic_salary <= 0:
+                basic_salary=num(sbu)
+            provisional_base=salary_for_days(basic_salary, worked_days)
+            calc_irows.append({
+                'Periodo':f'{real_end.month:02d}/{real_end.year}', '_period':provisional_period,
+                'Cédula':ident, 'Nombre':x['name'], 'Rel. Trabajo':'PROVISIONAL MES NO CERRADO',
+                'Sueldo':provisional_base, 'Días':worked_days, 'Patronal':0, 'Individual':0,
+                '_provisional':True, '_basic_salary':basic_salary
+            })
+
+    legal=legal_benefits_from_iess(real_start,x.get('end'),calc_irows,region,sbu) if calc_irows else {}
     dayrows=[]; observations=[]; info_observations=[]; day_observations=[]; period_observations=[]
+    if provisional_period:
+        prov=[z for z in calc_irows if z.get('_provisional')]
+        if prov:
+            z=prov[0]
+            info_observations.append(f"{real_end.month:02d}/{real_end.year}: IESS aún no disponible; APP usa base provisional ${num(z.get('Sueldo')):.2f} = sueldo básico ${num(z.get('_basic_salary')):.2f} / 30 x {num(z.get('Días')):g} días trabajados.")
     if not prec:
         day_observations.append('No encontrado en BDD Personal: no se puede validar días contra la base de personal')
     if not irows:
@@ -109,7 +139,7 @@ for x in items:
     for rr in x.get('rows',[]):
         m=_month_num(rr.get('Mes')); y=int(rr.get('Año inferido') or x['end'].year)
         expected=_payroll_days_for_month(real_start,real_end,y,m) if m else 0
-        imatch=[z for z in irows if (z.get('_period') or parse_month_period(z.get('Periodo'))) == (y,m)]
+        imatch=[z for z in calc_irows if (z.get('_period') or parse_month_period(z.get('Periodo'))) == (y,m)]
         idays=num(imatch[0].get('Días')) if imatch else None
         ibase=num(imatch[0].get('Sueldo')) if imatch else None
         ibase_adj=adjusted_iess_base_for_days(ibase, idays, expected) if imatch else None
@@ -127,7 +157,7 @@ for x in items:
         if ibase_adj is not None and abs(rr_base-ibase_adj)>MONETARY_TOLERANCE:
             action = 'base IESS conservada' if (idays is not None and idays <= expected) else 'base IESS recortada al máximo por fechas'
             info_observations.append(f'{m:02d}/{y}: base RR.HH. ${rr_base:.2f} vs base IESS utilizable ${ibase_adj:.2f} ({action}; IESS ${ibase:.2f} / {idays:g} días; máximo por fechas {expected:g}; dif. ${abs(rr_base-ibase_adj):.2f})')
-        row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días máximos por fechas':expected,'Días IESS (informativo)':idays,'Base RR.HH.':rr_base,'Base IESS reportada':ibase,'Base IESS utilizable':ibase_adj,'Dif. RRHH-IESS utilizable':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
+        row={'Trabajador':x['name'],'Cédula':ident,'Periodo':f'{m:02d}/{y}' if m else str(rr.get('Mes')),'Días RR.HH.':rr_days,'Días máximos por fechas':expected,'Días IESS (informativo)':(None if (imatch and imatch[0].get('_provisional')) else idays),'Base RR.HH.':rr_base,'Base IESS reportada':(None if (imatch and imatch[0].get('_provisional')) else ibase),'Base IESS utilizable':ibase_adj,'Fuente base':('PROVISIONAL: sueldo básico / 30 x días trabajados' if (imatch and imatch[0].get('_provisional')) else 'IESS'),'Dif. RRHH-IESS utilizable':round(rr_base-(ibase_adj or 0),2) if ibase_adj is not None else None}
         dayrows.append(row); month_rows.append(row)
 
     # Control de períodos:
@@ -251,4 +281,4 @@ d1,d2=st.columns(2)
 with d1: st.download_button('⬇️ Descargar auditoría MASIVA en Excel',bio.getvalue(),'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
 with d2: st.download_button('⬇️ Descargar auditoría MASIVA en PDF',pdf_bytes,'Auditoria_Masiva_Liquidaciones_CENASE_v8_3.pdf','application/pdf',use_container_width=True)
 
-st.caption('v8.6 · estado REVISAR solo por vacaciones > $1,50, período vacacional o días/fechas BDD · D13, diferencias mensuales de base y aportes IESS son informativos')
+st.caption('v8.8 · mes corriente sin IESS: base provisional = sueldo básico / 30 × días trabajados · meses cerrados conservan IESS real · tolerancia ±$1,50')
