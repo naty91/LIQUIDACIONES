@@ -841,17 +841,28 @@ def resolve_personnel_record(records, ident='', name='', liquidation_end=None):
     candidates=[]
     for r in records or []:
         match = (ident_n and r['ident']==ident_n) or (name_n and normalize_text(r['name'])==name_n)
-        if not match: continue
-        if end and r['start'] > end: continue
+        if not match:
+            continue
+
+        # Normalizar nuevamente las fechas antes de compararlas. Esto evita TypeError
+        # cuando Excel/Pandas entrega datetime, Timestamp, texto o serial de Excel.
+        r_start = as_date(r.get('start'))
+        r_end = as_date(r.get('end'))
+        if not r_start:
+            continue
+        if end and r_start > end:
+            continue
+
         # Puntaje: cédula > nombre; salida exacta/cercana > ciclo abierto; ingreso más reciente.
         score = 1000 if ident_n and r['ident']==ident_n else 500
-        if end and r.get('end'):
-            delta=abs((r['end']-end).days)
+        if end and r_end:
+            delta = abs((r_end - end).days)
             score += max(0, 300-delta)
-            if r['end']==end: score += 500
-        elif end and not r.get('end'):
+            if r_end == end:
+                score += 500
+        elif end and not r_end:
             score += 150
-        score += r['start'].toordinal()/1000000.0
+        score += r_start.toordinal()/1000000.0
         candidates.append((score,r))
     if not candidates: return None,''
     candidates.sort(key=lambda x:x[0], reverse=True)
