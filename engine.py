@@ -101,22 +101,41 @@ def num(v) -> float:
 
 
 def as_date(v):
+    """Convierte fechas de Excel/Pandas/texto a datetime.date de forma segura."""
+    if v is None:
+        return None
+    # NaN / NaT / valores vacíos de pandas
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+    # datetime/date de Python o Timestamp de pandas
     if isinstance(v, datetime):
         return v.date()
     if isinstance(v, date):
         return v
-    if isinstance(v, (int, float)):
-        # Excel 1900 date system
+    if isinstance(v, pd.Timestamp):
+        return v.date()
+    # Serial numérico de Excel (incluye numpy.int64 / numpy.float64)
+    try:
+        if not isinstance(v, (str, bytes, bool)):
+            n = float(v)
+            if 1 <= n <= 100000:
+                return (datetime(1899, 12, 30) + pd.to_timedelta(n, unit="D")).date()
+    except Exception:
+        pass
+    # Texto u otros tipos convertibles por pandas
+    s = str(v).strip()
+    if not s or s.lower() in {"nan", "nat", "none", "null", "-"}:
+        return None
+    for dayfirst in (True, False):
         try:
-            return (datetime(1899, 12, 30) + pd.to_timedelta(float(v), unit="D")).date()
+            ts = pd.to_datetime(s, dayfirst=dayfirst, errors="coerce")
+            if pd.notna(ts):
+                return ts.date()
         except Exception:
-            return None
-    if isinstance(v, str) and v.strip():
-        for dayfirst in (True, False):
-            try:
-                return pd.to_datetime(v, dayfirst=dayfirst).date()
-            except Exception:
-                pass
+            pass
     return None
 
 
@@ -856,7 +875,7 @@ def resolve_personnel_record(records, ident='', name='', liquidation_end=None):
         # Puntaje: cédula > nombre; salida exacta/cercana > ciclo abierto; ingreso más reciente.
         score = 1000 if ident_n and r['ident']==ident_n else 500
         if end and r_end:
-            delta = abs((r_end - end).days)
+            delta = abs(r_end.toordinal() - end.toordinal())
             score += max(0, 300-delta)
             if r_end == end:
                 score += 500
